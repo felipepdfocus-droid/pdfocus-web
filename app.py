@@ -81,9 +81,16 @@ def _get_sheets_service():
 
 # ── CACHÉ EN GOOGLE DRIVE ─────────────────────────────────────
 def _find_drive_cache_file_id(svc):
+    # Busca el archivo de caché dentro de la carpeta de manifiestos (service accounts
+    # no tienen almacenamiento propio, deben guardar en carpetas compartidas con ellos)
+    folder_id = FOLDER_ID_MANIFIESTOS or FOLDER_ID_FACTURAS
     try:
+        if folder_id:
+            q = f"name='{DRIVE_CACHE_FILENAME}' and '{folder_id}' in parents and trashed=false"
+        else:
+            q = f"name='{DRIVE_CACHE_FILENAME}' and trashed=false"
         result = svc.files().list(
-            q=f"name='{DRIVE_CACHE_FILENAME}' and trashed=false",
+            q=q,
             fields="files(id, name, modifiedTime)",
             pageSize=5,
         ).execute()
@@ -110,9 +117,18 @@ def _save_index_to_drive():
             svc.files().update(fileId=existing_id, media_body=media).execute()
             print(f"[DRIVE-CACHE] Caché actualizado en Drive: {total} PDFs.", flush=True)
         else:
-            file_metadata = {"name": DRIVE_CACHE_FILENAME, "mimeType": "application/json"}
+            # Guardar dentro de la carpeta compartida (service accounts no tienen
+            # almacenamiento propio — solo pueden crear archivos en carpetas que les
+            # fueron compartidas con permiso de escritura)
+            folder_id = FOLDER_ID_MANIFIESTOS or FOLDER_ID_FACTURAS
+            file_metadata = {
+                "name": DRIVE_CACHE_FILENAME,
+                "mimeType": "application/json",
+            }
+            if folder_id:
+                file_metadata["parents"] = [folder_id]
             svc.files().create(body=file_metadata, media_body=media, fields="id").execute()
-            print(f"[DRIVE-CACHE] Caché creado en Drive: {total} PDFs.", flush=True)
+            print(f"[DRIVE-CACHE] Caché creado en Drive (carpeta compartida): {total} PDFs.", flush=True)
     except Exception as e:
         print(f"[DRIVE-CACHE] Error guardando caché en Drive: {e}", flush=True)
 
