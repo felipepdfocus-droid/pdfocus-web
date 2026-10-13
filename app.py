@@ -2,6 +2,8 @@
 PDFocus Web — Felipe Ceballos
 Busca referencias en PDFs almacenados en Google Drive y los devuelve marcados.
 Sistema de login por token por empresa, almacenado en Google Sheets.
+Cache en disco: el índice se guarda en /tmp/pdfocus_index_cache.json
+para sobrevivir reinicios sin reconstruir desde cero.
 """
 
 import os
@@ -31,7 +33,10 @@ FOLDER_ID_MANIFIESTOS = os.environ.get("FOLDER_MANIFIESTOS", "")
 FOLDER_ID_FACTURAS    = os.environ.get("FOLDER_FACTURAS", "")
 SERVICE_ACCOUNT_JSON  = os.environ.get("GOOGLE_SERVICE_ACCOUNT", "")
 ADMIN_TOKEN           = os.environ.get("ADMIN_TOKEN", "pdfocus_kino_2026")
-SHEETS_ID             = os.environ.get("SHEETS_ID", "1a-IIDPDbimXLVys0vS6keqls-fz4bCU1pq28qiZ2qJY")
+SHEETS_ID             = os.environ.get("SHEETS_ID", "1a-lIDPDbimXLVys0vS6keqls-fz4bCU1pq28qiZ2qJY")
+
+# Ruta del cache en disco (persiste entre reinicios del proceso en Render)
+INDEX_CACHE_PATH = "/tmp/pdfocus_index_cache.json"
 
 # Cache en memoria
 _INDEX_CACHE = {}          # {section_key: {file_id: {name, compact, modified_time}}}
@@ -45,6 +50,46 @@ _USERS_LOADED = {"ts": 0}    # timestamp última carga
 
 # Intervalo de actualización incremental (1 hora)
 _UPDATE_INTERVAL = 3600
+
+
+# ── CACHE EN DISCO ────────────────────────────────────────────
+def _save_index_to_disk():
+    """Guarda el índice en disco para sobrevivir reinicios."""
+    try:
+        with _INDEX_LOCK:
+            data = dict(_INDEX_CACHE)
+        # El compact puede ser muy grande; guardamos todo
+        with open(INDEX_CACHE_PATH, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+        total = sum(len(v) for v in data.values())
+        print(f"[CACHE] Índice guardado en disco: {total} PDFs.", flush=True)
+    except Exception as e:
+        print(f"[CACHE] Error guardando índice en disco: {e}", flush=True)
+
+
+def _load_index_from_disk():
+    """Carga el índice desde disco si existe. Retorna True si lo cargó."""
+    if not os.path.exists(INDEX_CACHE_PATH):
+        print("[CACHE] No hay cache en disco.", flush=True)
+        return False
+    try:
+        with open(INDEX_CACHE_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not data:
+            print("[CACHE] Cache en disco vacío.", flush=True)
+            return False
+        with _INDEX_LOCK:
+            _INDEX_CACHE.clear()
+            _INDEX_CACHE.update(data)
+            for sec_key in ("manifiestos", "facturas"):
+                if sec_key in data and len(data[sec_key]) > 0:
+                    _INDEX_BUILT[sec_key] = True
+        total = sum(len(v) for v in data.values())
+        print(f"[CACHE] Índice cargado desde disco: {total} PDFs. ¡Inicio rápido!", flush=True)
+        return True
+    except Exception as e:
+        print(f"[CACHE] Error cargando índice desde disco: {e}", flush=True)
+        return False
 
 
 # ── GOOGLE SERVICES ───────────────────────────────────────────
@@ -428,6 +473,8 @@ def build_index(folder_id, section_key):
         _INDEX_CACHE[section_key] = new_entries
         _INDEX_BUILT[section_key] = True
     print(f"[INDEX] {section_key}: {len(new_entries)} PDFs indexados. LISTO.", flush=True)
+    # Guardar en disco después de cada sección
+    _save_index_to_disk()
 
 
 def update_index_incremental(folder_id, section_key):
@@ -468,6 +515,9 @@ def update_index_incremental(folder_id, section_key):
 
     with _INDEX_LOCK:
         _INDEX_CACHE[section_key] = current
+
+    if nuevos > 0 or removed:
+        _save_index_to_disk()
 
     print(f"[UPDATE] {section_key}: {nuevos} nuevos/modificados, {len(removed)} eliminados. Total: {len(current)}.", flush=True)
 
@@ -649,12 +699,17 @@ def login_page():
 
 @app.route("/acceso")
 def acceso():
+    """
+    Valida el token que viene en la URL (?token=XYZ) y si es válido
+    setea una cookie de sesión y redirige a la app principal.
+    """
     token = request.args.get("token", "").strip()
     empresa = _validate_token(token)
     if not empresa:
         return render_template("login.html", error="Token inválido o inactivo.")
+    # Setear cookie con el token
     resp = make_response(redirect(url_for("index") + f"?token={token}"))
-    resp.set_cookie("pdfocus_token", token, max_age=60 * 60 * 24 * 30)
+    resp.set_cookie("pdfocus_token", token, max_age=60 * 60 * 24 * 30)  # 30 días
     return resp
 
 
@@ -677,6 +732,7 @@ def status():
 @require_token
 def index(empresa=None, token=None):
     resp = make_response(render_template("index.html", empresa=empresa, token=token))
+    # Renovar cookie en cada visita
     resp.set_cookie("pdfocus_token", token, max_age=60 * 60 * 24 * 30)
     return resp
 
@@ -731,12 +787,16 @@ def ver_pdf(empresa=None, token=None):
     try:
         pdf_bytes = download_pdf_bytes(drive_id)
     except Exception as e:
+        print(f"[VER_PDF] Error descargando {drive_id}: {e}", flush=True)
         return f"No se pudo descargar el PDF: {e}", 500
 
     try:
         mode = "manifesto" if "manifest" in tipo or tipo == "manifesto" else "factura"
         marked_bytes, found = annotate_pdf_bytes(pdf_bytes, codigo, mode=mode)
+        if not found:
+            print(f"[VER_PDF] Referencia '{codigo}' no encontrada en {drive_id}", flush=True)
     except Exception as e:
+        print(f"[VER_PDF] Error anotando PDF {drive_id}: {e}", flush=True)
         marked_bytes = pdf_bytes
 
     return send_file(
@@ -749,12 +809,14 @@ def ver_pdf(empresa=None, token=None):
 
 # ── PANEL DE ADMINISTRACIÓN ───────────────────────────────────
 def _check_admin():
+    """Verifica si la petición tiene el token de admin válido (header o query param)."""
     token = request.headers.get("X-Admin-Token") or request.args.get("admin_token") or request.cookies.get("pdfocus_admin")
     return token == ADMIN_TOKEN
 
 
 @app.route("/admin")
 def admin_panel():
+    """Panel de administración — requiere ADMIN_TOKEN."""
     if not _check_admin():
         return render_template("admin_login.html")
     users = _get_users(force_reload=True)
@@ -775,7 +837,7 @@ def admin_login():
     if token != ADMIN_TOKEN:
         return render_template("admin_login.html", error="Token incorrecto.")
     resp = make_response(redirect(url_for("admin_panel")))
-    resp.set_cookie("pdfocus_admin", token, max_age=60 * 60 * 8)
+    resp.set_cookie("pdfocus_admin", token, max_age=60 * 60 * 8)  # 8 horas
     return resp
 
 
@@ -790,10 +852,13 @@ def admin_logout():
 def admin_agregar_empresa():
     if not _check_admin():
         return jsonify({"error": "No autorizado"}), 401
-    data = request.get_json(silent=True) or {}
-    empresa = data.get("empresa", "").strip()
+    empresa = (request.form.get("empresa") or request.get_json(silent=True, force=True) or {}).get("empresa") or ""
+    if isinstance(empresa, dict):
+        empresa = ""
+    empresa = str(empresa).strip()
     if not empresa:
-        empresa = (request.form.get("empresa") or "").strip()
+        data = request.get_json(silent=True) or {}
+        empresa = data.get("empresa", "").strip()
     if not empresa:
         return jsonify({"error": "Nombre de empresa requerido"}), 400
     token = _generate_token()
@@ -833,6 +898,12 @@ def admin_rebuild_index():
         _INDEX_BUILT["manifiestos"] = False
         _INDEX_BUILT["facturas"]    = False
         _INDEX_CACHE.clear()
+    # Borrar cache en disco para forzar reconstrucción completa
+    try:
+        if os.path.exists(INDEX_CACHE_PATH):
+            os.remove(INDEX_CACHE_PATH)
+    except Exception:
+        pass
     threading.Thread(target=_rebuild_all, daemon=True).start()
     return jsonify({"ok": True, "mensaje": "Reconstrucción iniciada."})
 
@@ -875,6 +946,27 @@ def _start_index_background():
         if not SERVICE_ACCOUNT_JSON:
             print("[STARTUP] ERROR: GOOGLE_SERVICE_ACCOUNT está vacío.", flush=True)
             return
+
+        # Intentar cargar desde cache en disco primero
+        cache_loaded = _load_index_from_disk()
+        if cache_loaded:
+            print("[STARTUP] Índice listo (desde cache en disco).", flush=True)
+            # Aún así hacer actualización incremental en background para nuevos PDFs
+            print("[STARTUP] Verificando cambios nuevos en Drive...", flush=True)
+            if FOLDER_ID_MANIFIESTOS:
+                try:
+                    update_index_incremental(FOLDER_ID_MANIFIESTOS, "manifiestos")
+                except Exception as e:
+                    print(f"[STARTUP] Error actualizando manifiestos: {e}", flush=True)
+            if FOLDER_ID_FACTURAS:
+                try:
+                    update_index_incremental(FOLDER_ID_FACTURAS, "facturas")
+                except Exception as e:
+                    print(f"[STARTUP] Error actualizando facturas: {e}", flush=True)
+            print("[STARTUP] Verificación de cambios completada.", flush=True)
+            return
+
+        # No hay cache — construir desde cero
         if FOLDER_ID_MANIFIESTOS:
             try:
                 build_index(FOLDER_ID_MANIFIESTOS, "manifiestos")
