@@ -649,17 +649,12 @@ def login_page():
 
 @app.route("/acceso")
 def acceso():
-    """
-    Valida el token que viene en la URL (?token=XYZ) y si es válido
-    setea una cookie de sesión y redirige a la app principal.
-    """
     token = request.args.get("token", "").strip()
     empresa = _validate_token(token)
     if not empresa:
         return render_template("login.html", error="Token inválido o inactivo.")
-    # Setear cookie con el token
     resp = make_response(redirect(url_for("index") + f"?token={token}"))
-    resp.set_cookie("pdfocus_token", token, max_age=60 * 60 * 24 * 30)  # 30 días
+    resp.set_cookie("pdfocus_token", token, max_age=60 * 60 * 24 * 30)
     return resp
 
 
@@ -682,7 +677,6 @@ def status():
 @require_token
 def index(empresa=None, token=None):
     resp = make_response(render_template("index.html", empresa=empresa, token=token))
-    # Renovar cookie en cada visita
     resp.set_cookie("pdfocus_token", token, max_age=60 * 60 * 24 * 30)
     return resp
 
@@ -737,16 +731,12 @@ def ver_pdf(empresa=None, token=None):
     try:
         pdf_bytes = download_pdf_bytes(drive_id)
     except Exception as e:
-        print(f"[VER_PDF] Error descargando {drive_id}: {e}", flush=True)
         return f"No se pudo descargar el PDF: {e}", 500
 
     try:
         mode = "manifesto" if "manifest" in tipo or tipo == "manifesto" else "factura"
         marked_bytes, found = annotate_pdf_bytes(pdf_bytes, codigo, mode=mode)
-        if not found:
-            print(f"[VER_PDF] Referencia '{codigo}' no encontrada en {drive_id}", flush=True)
     except Exception as e:
-        print(f"[VER_PDF] Error anotando PDF {drive_id}: {e}", flush=True)
         marked_bytes = pdf_bytes
 
     return send_file(
@@ -759,14 +749,12 @@ def ver_pdf(empresa=None, token=None):
 
 # ── PANEL DE ADMINISTRACIÓN ───────────────────────────────────
 def _check_admin():
-    """Verifica si la petición tiene el token de admin válido (header o query param)."""
     token = request.headers.get("X-Admin-Token") or request.args.get("admin_token") or request.cookies.get("pdfocus_admin")
     return token == ADMIN_TOKEN
 
 
 @app.route("/admin")
 def admin_panel():
-    """Panel de administración — requiere ADMIN_TOKEN."""
     if not _check_admin():
         return render_template("admin_login.html")
     users = _get_users(force_reload=True)
@@ -787,7 +775,7 @@ def admin_login():
     if token != ADMIN_TOKEN:
         return render_template("admin_login.html", error="Token incorrecto.")
     resp = make_response(redirect(url_for("admin_panel")))
-    resp.set_cookie("pdfocus_admin", token, max_age=60 * 60 * 8)  # 8 horas
+    resp.set_cookie("pdfocus_admin", token, max_age=60 * 60 * 8)
     return resp
 
 
@@ -802,13 +790,10 @@ def admin_logout():
 def admin_agregar_empresa():
     if not _check_admin():
         return jsonify({"error": "No autorizado"}), 401
-    empresa = (request.form.get("empresa") or request.get_json(silent=True, force=True) or {}).get("empresa") or ""
-    if isinstance(empresa, dict):
-        empresa = ""
-    empresa = str(empresa).strip()
+    data = request.get_json(silent=True) or {}
+    empresa = data.get("empresa", "").strip()
     if not empresa:
-        data = request.get_json(silent=True) or {}
-        empresa = data.get("empresa", "").strip()
+        empresa = (request.form.get("empresa") or "").strip()
     if not empresa:
         return jsonify({"error": "Nombre de empresa requerido"}), 400
     token = _generate_token()
