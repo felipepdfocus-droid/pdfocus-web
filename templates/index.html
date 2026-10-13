@@ -1,639 +1,369 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="es">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>PDFocus</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap">
   <style>
-    /* ── Tokens ─────────────────────────────────────────────── */
-    :root {
-      --bg:        #080a10;
-      --surface:   #0f1219;
-      --surface2:  #161b27;
-      --surface3:  #1d2335;
-      --border:    #1f2438;
-      --border2:   #2a3050;
-      --fg:        #edf0f7;
-      --fg2:       #a8b0c8;
-      --fg3:       #5c6480;
-      --accent:    #3b6ef5;
-      --accent-hi: #5d89ff;
-      --accent-bg: #0d1733;
-      --green:     #1fd68a;
-      --green-bg:  #051a10;
-      --red:       #ff4d4d;
-      --gold:      #f0b429;
-      --gold-bg:   #1a1200;
-    }
-
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    html { height: 100%; }
-
+    :root {
+      --bg: #f5f6fa;
+      --surface: #ffffff;
+      --border: #e2e5ef;
+      --fg: #0d0f1a;
+      --fg2: #5a6072;
+      --accent: #1a56db;
+      --accent-h: #1445b8;
+      --green: #0e9f6e;
+      --blue: #1a56db;
+      --shadow: 0 2px 12px rgba(0,0,0,0.07);
+    }
     body {
       font-family: 'Inter', system-ui, sans-serif;
       background: var(--bg);
       color: var(--fg);
-      min-height: 100%;
-      -webkit-font-smoothing: antialiased;
-      background-image:
-        radial-gradient(ellipse 80% 50% at 50% -10%, rgba(59,110,245,0.12) 0%, transparent 70%);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
     }
 
-    /* ── Top nav ────────────────────────────────────────────── */
-    .topnav {
-      position: sticky;
-      top: env(safe-area-inset-top, 0px);
-      z-index: 50;
-      background: rgba(8,10,16,0.85);
-      backdrop-filter: blur(18px);
-      -webkit-backdrop-filter: blur(18px);
+    /* ── HEADER ── */
+    header {
+      background: var(--surface);
       border-bottom: 1px solid var(--border);
-    }
-    .topnav-inner {
-      max-width: 720px;
-      margin: 0 auto;
-      padding: 0 20px;
-      height: 60px;
+      padding: 0 24px;
+      height: 56px;
       display: flex;
       align-items: center;
       justify-content: space-between;
+      position: sticky;
+      top: 0;
+      z-index: 10;
     }
-    .nav-brand {
-      display: flex;
-      align-items: center;
-      gap: 11px;
-    }
-    .nav-logo {
-      width: 36px; height: 36px;
-      background: linear-gradient(135deg, #3b6ef5 0%, #6a8fff 100%);
-      border-radius: 9px;
-      display: flex; align-items: center; justify-content: center;
-      box-shadow: 0 0 0 1px rgba(93,137,255,.3), 0 4px 14px rgba(59,110,245,.35);
-      flex-shrink: 0;
-    }
-    .nav-logo svg { width: 19px; height: 19px; fill: #fff; }
-    .nav-title {
-      font-size: 17px;
-      font-weight: 700;
-      letter-spacing: -0.4px;
-    }
-    .nav-dot {
-      width: 6px; height: 6px;
-      background: var(--green);
-      border-radius: 50%;
-      box-shadow: 0 0 6px var(--green);
-      animation: pulse 2.4s ease-in-out infinite;
-    }
-    @keyframes pulse {
-      0%,100% { opacity: 1; transform: scale(1); }
-      50%      { opacity: .55; transform: scale(.8); }
-    }
-    .nav-status {
-      font-size: 11px;
-      color: var(--fg3);
-      display: flex;
-      align-items: center;
-      gap: 6px;
-    }
-
-    /* ── Page shell ─────────────────────────────────────────── */
-    .page {
-      max-width: 720px;
-      margin: 0 auto;
-      padding: 24px 20px env(safe-area-inset-bottom, 24px);
-    }
-
-    /* ── Hero ───────────────────────────────────────────────── */
-    .hero {
-      text-align: center;
-      padding: 36px 0 32px;
-    }
-    .hero-eyebrow {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      background: var(--accent-bg);
-      border: 1px solid rgba(59,110,245,.3);
-      border-radius: 20px;
-      padding: 5px 14px;
-      font-size: 11px;
-      font-weight: 600;
-      color: var(--accent-hi);
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
-      margin-bottom: 18px;
-    }
-    .hero-eyebrow svg { width: 11px; height: 11px; fill: currentColor; }
-    .hero-title {
-      font-size: clamp(26px, 6vw, 38px);
+    .brand {
+      font-size: 1.35rem;
       font-weight: 800;
-      letter-spacing: -1px;
-      line-height: 1.15;
-      margin-bottom: 12px;
-      background: linear-gradient(160deg, #edf0f7 30%, #7a8bba 100%);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-      background-clip: text;
+      letter-spacing: -0.04em;
+      color: var(--accent);
     }
-    .hero-sub {
-      font-size: 14px;
-      color: var(--fg2);
-      line-height: 1.6;
-      max-width: 420px;
-      margin: 0 auto;
-    }
-
-    /* ── Search panel ───────────────────────────────────────── */
-    .search-panel {
-      background: var(--surface);
-      border: 1px solid var(--border2);
-      border-radius: 18px;
-      padding: 24px;
-      margin-bottom: 28px;
-      box-shadow: 0 8px 48px rgba(0,0,0,.5), 0 1px 0 rgba(255,255,255,.04) inset;
-    }
-
-    .search-field-wrap {
-      position: relative;
-      margin-bottom: 16px;
-    }
-    .search-icon {
-      position: absolute;
-      left: 16px; top: 50%; transform: translateY(-50%);
-      pointer-events: none;
-    }
-    .search-icon svg {
-      width: 18px; height: 18px;
-      stroke: var(--fg3);
-      fill: none;
-      stroke-width: 2;
-      stroke-linecap: round;
-    }
-    #codigo {
-      width: 100%;
-      background: var(--bg);
-      border: 1px solid var(--border2);
-      border-radius: 12px;
-      color: var(--fg);
-      font-family: inherit;
-      font-size: 16px;
-      font-weight: 500;
-      padding: 14px 16px 14px 48px;
-      outline: none;
-      letter-spacing: 0.03em;
-      transition: border-color .2s, box-shadow .2s;
-    }
-    #codigo::placeholder { color: var(--fg3); font-weight: 400; }
-    #codigo:focus {
-      border-color: var(--accent);
-      box-shadow: 0 0 0 3px rgba(59,110,245,.2);
-    }
-
-    .search-actions {
+    .brand span { color: var(--fg); }
+    .empresa-badge {
       display: flex;
-      gap: 10px;
       align-items: center;
-      flex-wrap: wrap;
-    }
-
-    .tipo-group {
-      display: flex;
+      gap: 8px;
+      font-size: 0.78rem;
+      font-weight: 600;
+      color: var(--fg2);
       background: var(--bg);
       border: 1px solid var(--border);
-      border-radius: 10px;
-      overflow: hidden;
-      flex: 1;
+      border-radius: 20px;
+      padding: 5px 12px;
     }
-    .btn-tipo {
-      flex: 1;
-      background: transparent;
-      border: none;
-      color: var(--fg3);
-      font-family: inherit;
-      font-size: 12px;
-      font-weight: 600;
-      padding: 10px 8px;
-      cursor: pointer;
-      transition: all .15s;
-      border-right: 1px solid var(--border);
-      white-space: nowrap;
+    .empresa-badge .dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      background: var(--green);
+      flex-shrink: 0;
     }
-    .btn-tipo:last-child { border-right: none; }
-    .btn-tipo.active {
-      background: var(--surface2);
-      color: var(--fg);
-    }
-    .btn-tipo:hover:not(.active) { color: var(--fg2); }
 
-    .btn-buscar {
-      background: linear-gradient(135deg, #3b6ef5 0%, #2855d4 100%);
+    /* ── MAIN ── */
+    main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 48px 16px 80px;
+      gap: 32px;
+    }
+
+    /* ── SEARCH CARD ── */
+    .search-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      box-shadow: var(--shadow);
+      padding: 32px 28px;
+      width: 100%;
+      max-width: 580px;
+    }
+    .search-card h1 {
+      font-size: 1.1rem;
+      font-weight: 700;
+      margin-bottom: 4px;
+    }
+    .search-card p {
+      font-size: 0.85rem;
+      color: var(--fg2);
+      margin-bottom: 24px;
+    }
+    .search-row {
+      display: flex;
+      gap: 10px;
+    }
+    input[type="text"] {
+      flex: 1;
+      border: 1.5px solid var(--border);
+      border-radius: 10px;
+      padding: 11px 14px;
+      font-size: 0.95rem;
+      font-family: inherit;
+      color: var(--fg);
+      background: var(--bg);
+      transition: border-color 0.15s;
+      min-width: 0;
+    }
+    input[type="text"]:focus {
+      outline: none;
+      border-color: var(--accent);
+      background: #fff;
+    }
+    .btn-search {
+      background: var(--accent);
       color: #fff;
       border: none;
       border-radius: 10px;
-      font-family: inherit;
-      font-size: 14px;
-      font-weight: 700;
-      padding: 10px 22px;
-      cursor: pointer;
-      white-space: nowrap;
-      letter-spacing: 0.01em;
-      box-shadow: 0 4px 16px rgba(59,110,245,.4);
-      transition: opacity .15s, transform .1s, box-shadow .15s;
-      display: flex; align-items: center; gap: 8px;
-    }
-    .btn-buscar:hover  { opacity: .9; box-shadow: 0 6px 20px rgba(59,110,245,.5); }
-    .btn-buscar:active { transform: scale(.97); }
-    .btn-buscar svg { width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 2.5; stroke-linecap: round; }
-
-    /* ── Divider ─────────────────────────────────────────────── */
-    .section-head {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      margin-bottom: 14px;
-    }
-    .section-label {
-      font-size: 11px;
-      font-weight: 700;
-      color: var(--fg3);
-      letter-spacing: 0.09em;
-      text-transform: uppercase;
-    }
-    .count-badge {
-      background: var(--surface2);
-      border: 1px solid var(--border2);
-      border-radius: 20px;
-      font-size: 11px;
+      padding: 11px 20px;
+      font-size: 0.9rem;
       font-weight: 600;
-      color: var(--fg2);
-      padding: 2px 10px;
-    }
-
-    /* ── Status ─────────────────────────────────────────────── */
-    #status {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 10px;
-      font-size: 13px;
-      color: var(--fg2);
-      min-height: 48px;
-    }
-    .spinner {
-      width: 18px; height: 18px;
-      border: 2px solid var(--border2);
-      border-top-color: var(--accent-hi);
-      border-radius: 50%;
-      animation: spin .65s linear infinite;
+      font-family: inherit;
+      cursor: pointer;
+      transition: background 0.15s;
+      white-space: nowrap;
       flex-shrink: 0;
     }
-    @keyframes spin { to { transform: rotate(360deg); } }
+    .btn-search:hover { background: var(--accent-h); }
+    .btn-search:disabled { opacity: 0.6; cursor: default; }
 
-    /* ── Result list ─────────────────────────────────────────── */
-    #resultados { display: flex; flex-direction: column; gap: 10px; }
+    /* Filtro de tipo */
+    .tipo-row {
+      display: flex;
+      gap: 8px;
+      margin-top: 14px;
+      flex-wrap: wrap;
+    }
+    .tipo-btn {
+      font-size: 0.78rem;
+      font-weight: 600;
+      font-family: inherit;
+      padding: 5px 14px;
+      border-radius: 20px;
+      border: 1.5px solid var(--border);
+      background: transparent;
+      color: var(--fg2);
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .tipo-btn.active {
+      border-color: var(--accent);
+      background: var(--accent);
+      color: #fff;
+    }
 
-    .res-card {
+    /* ── ESTADO ── */
+    #estado {
+      font-size: 0.85rem;
+      color: var(--fg2);
+      margin-top: 12px;
+      min-height: 18px;
+    }
+
+    /* ── RESULTADOS ── */
+    #resultados {
+      width: 100%;
+      max-width: 580px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .res-header {
+      font-size: 0.78rem;
+      font-weight: 600;
+      color: var(--fg2);
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      padding: 0 2px;
+    }
+    .result-card {
       background: var(--surface);
       border: 1px solid var(--border);
-      border-radius: 14px;
-      padding: 16px 18px;
+      border-radius: 12px;
+      padding: 14px 16px;
       display: flex;
       align-items: center;
-      gap: 15px;
-      cursor: pointer;
-      transition: border-color .18s, background .18s, transform .12s;
-      position: relative;
-      overflow: hidden;
+      gap: 14px;
+      text-decoration: none;
+      color: inherit;
+      transition: box-shadow 0.15s, border-color 0.15s;
     }
-    .res-card::before {
-      content: '';
-      position: absolute;
-      left: 0; top: 0; bottom: 0;
-      width: 3px;
-      border-radius: 3px 0 0 3px;
+    .result-card:hover {
+      border-color: var(--accent);
+      box-shadow: 0 2px 12px rgba(26,86,219,0.10);
     }
-    .res-card.manifesto::before { background: var(--green); }
-    .res-card.factura::before   { background: var(--accent-hi); }
-    .res-card:hover {
-      border-color: var(--border2);
-      background: var(--surface2);
-      transform: translateY(-1px);
-    }
-
-    .res-icon-wrap {
-      width: 44px; height: 44px;
-      border-radius: 11px;
+    .res-icon {
+      width: 36px; height: 36px;
+      border-radius: 8px;
       display: flex; align-items: center; justify-content: center;
+      font-size: 1rem;
       flex-shrink: 0;
     }
-    .res-icon-wrap.manifesto {
-      background: var(--green-bg);
-      border: 1px solid rgba(31,214,138,.15);
-    }
-    .res-icon-wrap.factura {
-      background: var(--accent-bg);
-      border: 1px solid rgba(59,110,245,.2);
-    }
-    .res-icon-wrap svg { width: 20px; height: 20px; }
-
-    .res-body { flex: 1; min-width: 0; }
+    .res-icon.manifesto { background: #d1fae5; color: #059669; }
+    .res-icon.factura   { background: #dbeafe; color: #1d4ed8; }
+    .res-info { flex: 1; min-width: 0; }
     .res-nombre {
-      font-size: 13px;
+      font-size: 0.88rem;
       font-weight: 600;
-      color: var(--fg);
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
-      margin-bottom: 5px;
     }
-    .res-tags {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      flex-wrap: wrap;
-    }
-    .tag {
-      font-size: 10px;
-      font-weight: 700;
-      padding: 2px 9px;
-      border-radius: 20px;
-      letter-spacing: 0.05em;
-      text-transform: uppercase;
-    }
-    .tag.manifesto { background: var(--green-bg); color: var(--green); border: 1px solid rgba(31,214,138,.2); }
-    .tag.factura   { background: var(--accent-bg); color: var(--accent-hi); border: 1px solid rgba(59,110,245,.25); }
-
-    .res-cta {
-      font-size: 11px;
-      font-weight: 600;
-      color: var(--accent-hi);
-      display: flex; align-items: center; gap: 4px;
-      flex-shrink: 0;
-    }
-    .res-cta svg { width: 13px; height: 13px; stroke: currentColor; fill: none; stroke-width: 2.5; stroke-linecap: round; }
-
-    /* ── Empty state ─────────────────────────────────────────── */
-    .empty {
-      text-align: center;
-      padding: 56px 24px 32px;
-      color: var(--fg3);
-    }
-    .empty-icon {
-      width: 56px; height: 56px;
-      background: var(--surface2);
-      border: 1px solid var(--border2);
-      border-radius: 16px;
-      display: inline-flex; align-items: center; justify-content: center;
-      margin-bottom: 16px;
-    }
-    .empty-icon svg { width: 26px; height: 26px; stroke: var(--fg3); fill: none; stroke-width: 1.5; }
-    .empty h3 { font-size: 15px; font-weight: 600; color: var(--fg2); margin-bottom: 6px; }
-    .empty p  { font-size: 13px; line-height: 1.6; }
-
-    /* ── PDF overlay ─────────────────────────────────────────── */
-    #pdf-overlay {
-      display: none;
-      position: fixed; inset: 0;
-      z-index: 200;
-      background: rgba(4,5,10,.92);
-      backdrop-filter: blur(8px);
-      -webkit-backdrop-filter: blur(8px);
-      flex-direction: column;
-    }
-    #pdf-overlay.open { display: flex; }
-
-    .overlay-bar {
-      display: flex; align-items: center;
-      gap: 12px;
-      padding: 0 16px;
-      height: 56px;
-      background: var(--surface);
-      border-bottom: 1px solid var(--border2);
-      flex-shrink: 0;
-    }
-    .overlay-back {
-      width: 34px; height: 34px;
-      border-radius: 9px;
-      background: var(--surface2);
-      border: 1px solid var(--border2);
+    .res-tipo {
+      font-size: 0.74rem;
       color: var(--fg2);
-      display: flex; align-items: center; justify-content: center;
-      cursor: pointer; flex-shrink: 0;
-      transition: background .15s;
+      font-weight: 500;
+      margin-top: 2px;
     }
-    .overlay-back:hover { background: var(--surface3); }
-    .overlay-back svg { width: 16px; height: 16px; stroke: currentColor; fill: none; stroke-width: 2.2; stroke-linecap: round; }
-    .overlay-info { flex: 1; min-width: 0; }
-    .overlay-title {
-      font-size: 13px; font-weight: 600; color: var(--fg);
-      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    .res-arrow {
+      color: var(--fg2);
+      font-size: 0.9rem;
+      flex-shrink: 0;
     }
-    .overlay-hint { font-size: 11px; color: var(--fg3); margin-top: 1px; }
 
-    #pdf-frame { flex: 1; border: none; width: 100%; }
-
-    /* ── Footer ─────────────────────────────────────────────── */
-    footer {
+    /* ── EMPTY / ERROR ── */
+    .msg-empty {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 28px 20px;
       text-align: center;
-      padding: 32px 0 16px;
-      font-size: 11px;
-      color: var(--fg3);
-      border-top: 1px solid var(--border);
-      margin-top: 40px;
-      opacity: .7;
+      color: var(--fg2);
+      font-size: 0.88rem;
+    }
+    .msg-error {
+      background: #fef2f2;
+      border: 1px solid #fecaca;
+      border-radius: 12px;
+      padding: 14px 16px;
+      color: #b91c1c;
+      font-size: 0.88rem;
+    }
+
+    @media (max-width: 480px) {
+      main { padding: 28px 12px 60px; }
+      .search-card { padding: 24px 18px; }
+      .search-row { flex-direction: column; }
+      .btn-search { width: 100%; justify-content: center; display: flex; }
     }
   </style>
 </head>
 <body>
 
-<!-- Top nav -->
-<nav class="topnav">
-  <div class="topnav-inner">
-    <div class="nav-brand">
-      <div class="nav-logo">
-        <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm-1 1.5L18.5 9H13V3.5zM8 13h8v1.5H8V13zm0 3h6v1.5H8V16zm0-6h5v1.5H8V10z"/></svg>
-      </div>
-      <span class="nav-title">PDFocus</span>
-    </div>
-    <div class="nav-status">
-      <div class="nav-dot"></div>
-      <span>Sistema activo</span>
-    </div>
+<header>
+  <div class="brand">PDF<span>ocus</span></div>
+  {% if empresa %}
+  <div class="empresa-badge">
+    <span class="dot"></span>
+    {{ empresa }}
   </div>
-</nav>
+  {% endif %}
+</header>
 
-<div class="page">
+<main>
+  <div class="search-card">
+    <h1>Buscar referencia</h1>
+    <p>Ingresa el código o referencia a localizar en los documentos.</p>
 
-  <!-- Page title -->
-  <div style="padding: 20px 0 16px;">
-    <h1 style="font-size:20px;font-weight:700;letter-spacing:-0.4px;color:var(--fg);">Consulta de documentos</h1>
-    <p style="font-size:13px;color:var(--fg3);margin-top:4px;">Ingresa una referencia para buscar en manifiestos y facturas.</p>
-  </div>
-
-  <!-- Search panel -->
-  <div class="search-panel">
-    <div class="search-field-wrap">
-      <span class="search-icon">
-        <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
-      </span>
-      <input id="codigo" type="text" placeholder="Ej. S-640, BL-1234, REF-001…" autocomplete="off" autocapitalize="characters" spellcheck="false">
+    <div class="search-row">
+      <input type="text" id="codigo" placeholder="Ej: S-644WJ, 20250915..." autocomplete="off" autocorrect="off" spellcheck="false">
+      <button class="btn-search" id="btn-buscar" onclick="buscar()">Buscar</button>
     </div>
-    <div class="search-actions">
-      <div class="tipo-group">
-        <button class="btn-tipo active" id="btn-todos"       onclick="setTipo('todos')">Todos</button>
-        <button class="btn-tipo"        id="btn-manifiestos" onclick="setTipo('manifiestos')">Manifiestos</button>
-        <button class="btn-tipo"        id="btn-facturas"    onclick="setTipo('facturas')">Facturas</button>
-      </div>
-      <button class="btn-buscar" onclick="buscar()">
-        <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
-        Buscar
-      </button>
+
+    <div class="tipo-row">
+      <button class="tipo-btn active" data-tipo="ambos" onclick="setTipo(this)">Todos</button>
+      <button class="tipo-btn" data-tipo="manifiestos" onclick="setTipo(this)">Manifiestos</button>
+      <button class="tipo-btn" data-tipo="facturas" onclick="setTipo(this)">Facturas</button>
     </div>
+
+    <div id="estado"></div>
   </div>
 
-  <!-- Section header -->
-  <div class="section-head" id="section-head" style="display:none">
-    <span class="section-label">Resultados</span>
-    <span class="count-badge" id="count-badge"></span>
-  </div>
-
-  <!-- Status -->
-  <div id="status"></div>
-
-  <!-- Results -->
   <div id="resultados"></div>
-
-  <!-- Footer -->
-  <footer>PDFocus &nbsp;·&nbsp; Developed by Felipe Ceballos</footer>
-
-</div>
-
-<!-- PDF overlay -->
-<div id="pdf-overlay">
-  <div class="overlay-bar">
-    <button class="overlay-back" onclick="cerrarPDF()">
-      <svg viewBox="0 0 24 24"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
-    </button>
-    <div class="overlay-info">
-      <div class="overlay-title" id="overlay-title">—</div>
-      <div class="overlay-hint">Referencia marcada en el documento</div>
-    </div>
-  </div>
-  <iframe id="pdf-frame" src="about:blank"></iframe>
-</div>
+</main>
 
 <script>
-let tipoActual = 'todos';
-let codigoActual = '';
+  let tipoActivo = "ambos";
+  const TOKEN = "{{ token }}";
 
-function setTipo(t) {
-  tipoActual = t;
-  ['todos','manifiestos','facturas'].forEach(id => {
-    document.getElementById('btn-' + id).classList.toggle('active', id === t);
+  function setTipo(btn) {
+    document.querySelectorAll(".tipo-btn").forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+    tipoActivo = btn.dataset.tipo;
+  }
+
+  document.getElementById("codigo").addEventListener("keydown", e => {
+    if (e.key === "Enter") buscar();
   });
-}
 
-document.getElementById('codigo').addEventListener('keydown', e => {
-  if (e.key === 'Enter') buscar();
-});
+  async function buscar() {
+    const codigo = document.getElementById("codigo").value.trim();
+    if (!codigo) return;
+    const btn = document.getElementById("btn-buscar");
+    const estado = document.getElementById("estado");
+    const resultados = document.getElementById("resultados");
 
-async function buscar() {
-  const codigo = document.getElementById('codigo').value.trim();
-  codigoActual = codigo;
-  if (!codigo) {
-    document.getElementById('codigo').focus();
-    return;
-  }
-  const statusEl  = document.getElementById('status');
-  const resEl     = document.getElementById('resultados');
-  const headEl    = document.getElementById('section-head');
-  const countEl   = document.getElementById('count-badge');
+    btn.disabled = true;
+    estado.textContent = "Buscando…";
+    resultados.innerHTML = "";
 
-  headEl.style.display = 'none';
-  statusEl.innerHTML   = '<div class="spinner"></div><span>Buscando documentos…</span>';
-  resEl.innerHTML      = '';
+    try {
+      const resp = await fetch("/buscar?token=" + TOKEN, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ codigo, tipo: tipoActivo }),
+      });
+      const data = await resp.json();
 
-  try {
-    const r    = await fetch('/buscar', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ codigo: codigo, tipo: tipoActual === 'todos' ? 'ambos' : tipoActual })
-    });
-    const data = await r.json();
+      if (data.error) {
+        resultados.innerHTML = `<div class="msg-error">${data.error}</div>`;
+        estado.textContent = "";
+        return;
+      }
 
-    if (!r.ok) {
-      statusEl.innerHTML = `<span style="color:var(--red)">${esc(data.error || 'Error al buscar')}</span>`;
-      return;
-    }
+      const lista = data.resultados || [];
+      if (lista.length === 0) {
+        resultados.innerHTML = `<div class="msg-empty">No se encontró "<strong>${escHtml(codigo)}</strong>" en ningún documento.</div>`;
+        estado.textContent = "";
+        return;
+      }
 
-    const total = data.resultados.length;
-    statusEl.innerHTML = '';
-
-    if (total === 0) {
-      const indexando = data.indexando;
-      resEl.innerHTML = `
-        <div class="empty">
-          <div class="empty-icon">
-            ${indexando
-              ? '<svg viewBox="0 0 24 24"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg>'
-              : '<svg viewBox="0 0 24 24"><path d="M9 13h6M9 17h6M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6z"/></svg>'
-            }
-          </div>
-          <h3>${indexando ? 'Índice cargando…' : `Sin resultados para "${esc(codigo)}"`}</h3>
-          <p>${indexando ? 'Los documentos aún se están indexando.<br>Espera unos minutos e intenta de nuevo.' : 'No se encontró esta referencia en ningún documento.<br>Verifica el código e intenta nuevamente.'}</p>
-        </div>`;
-      return;
-    }
-
-    headEl.style.display = 'flex';
-    countEl.textContent  = `${total} documento${total !== 1 ? 's' : ''}`;
-
-    resEl.innerHTML = data.resultados.map(item => {
-      const isM   = item.tipo === 'manifesto';
-      const color = isM ? '#1fd68a' : '#5d89ff';
-      const path  = isM
-        ? 'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm-1 1.5L18.5 9H13V3.5zM8 11h8v1.5H8V11zm0 3h8v1.5H8V14zm0 3h5v1.5H8V17z'
-        : 'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm-1 1.5L18.5 9H13V3.5zM8 17l2.5-4 2 2.5 1.5-2 2.5 3.5H8z';
-      const pdfUrl = '/ver_pdf?drive_id='+encodeURIComponent(item.drive_id)+'&codigo='+encodeURIComponent(codigoActual)+'&tipo='+encodeURIComponent(item.tipo);
-      return `
-        <a class="res-card ${item.tipo}" href="${pdfUrl}" target="_blank" rel="noopener" style="text-decoration:none">
-          <div class="res-icon-wrap ${item.tipo}">
-            <svg viewBox="0 0 24 24" fill="${color}"><path d="${path}"/></svg>
-          </div>
-          <div class="res-body">
-            <div class="res-nombre">${esc(item.nombre)}</div>
-            <div class="res-tags">
-              <span class="tag ${item.tipo}">${isM ? 'Manifiesto' : 'Factura'}</span>
+      estado.textContent = "";
+      resultados.innerHTML = `<div class="res-header">${lista.length} resultado${lista.length > 1 ? "s" : ""}</div>`;
+      lista.forEach(r => {
+        const es_m = r.tipo === "manifesto" || r.tipo === "manifiestos";
+        const url = `/ver_pdf?drive_id=${encodeURIComponent(r.drive_id)}&codigo=${encodeURIComponent(codigo)}&tipo=${encodeURIComponent(r.tipo)}&token=${TOKEN}`;
+        resultados.innerHTML += `
+          <a class="result-card" href="${url}" target="_blank">
+            <div class="res-icon ${es_m ? 'manifesto' : 'factura'}">${es_m ? '📋' : '🧾'}</div>
+            <div class="res-info">
+              <div class="res-nombre">${escHtml(r.nombre)}</div>
+              <div class="res-tipo">${es_m ? 'Manifiesto' : 'Factura'}</div>
             </div>
-          </div>
-          <div class="res-cta">
-            <span>Ver</span>
-            <svg viewBox="0 0 24 24"><path d="M9 18l6-6-6-6"/></svg>
-          </div>
-        </a>`;
-    }).join('');
-
-  } catch {
-    statusEl.innerHTML = `<span style="color:var(--red)">Error de conexión. Intenta de nuevo.</span>`;
+            <div class="res-arrow">›</div>
+          </a>`;
+      });
+    } catch (err) {
+      resultados.innerHTML = `<div class="msg-error">Error de conexión. Intenta de nuevo.</div>`;
+      estado.textContent = "";
+    } finally {
+      btn.disabled = false;
+    }
   }
-}
 
-function verPDF(url, nombre) {
-  window.open(url, '_blank');
-}
-function cerrarPDF() {
-  document.getElementById('pdf-overlay').classList.remove('open');
-  document.getElementById('pdf-frame').src = 'about:blank';
-  document.body.style.overflow = '';
-}
-function esc(s) {
-  return String(s)
-    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
-    .replace(/>/g,'&gt;').replace(/"/g,'&quot;')
-    .replace(/'/g,'&#39;');
-}
+  function escHtml(s) {
+    return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+  }
 </script>
+
 </body>
 </html>
