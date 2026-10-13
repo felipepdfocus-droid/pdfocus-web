@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PDFocus — Acceso</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Inter', system-ui, sans-serif;
+      background: #f0f4ff;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px 16px;
+    }
+    .card {
+      background: #fff;
+      border-radius: 20px;
+      box-shadow: 0 4px 32px rgba(26,86,219,0.10);
+      padding: 48px 40px;
+      width: 100%;
+      max-width: 400px;
+      text-align: center;
+    }
+    .brand {
+      font-size: 2.4rem;
+      font-weight: 800;
+      letter-spacing: -0.04em;
+      color: #1a56db;
+      margin-bottom: 6px;
+    }
+    .brand span { color: #0d0f1a; }
+    .subtitle {
+      font-size: 0.88rem;
+      color: #5a6072;
+      margin-bottom: 36px;
+    }
+    label {
+      display: block;
+      font-size: 0.78rem;
+      font-weight: 600;
+      color: #5a6072;
+      text-align: left;
+      margin-bottom: 6px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    input[type="text"] {
+      width: 100%;
+      border: 1.5px solid #e2e5ef;
+      border-radius: 10px;
+      padding: 12px 14px;
+      font-size: 1rem;
+      font-family: inherit;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: #0d0f1a;
+      background: #f5f6fa;
+      transition: border-color 0.15s;
+      margin-bottom: 16px;
+      text-align: center;
+    }
+    input[type="text"]:focus {
+      outline: none;
+      border-color: #1a56db;
+      background: #fff;
+    }
+    .btn {
+      width: 100%;
+      background: #1a56db;
+      color: #fff;
+      border: none;
+      border-radius: 10px;
+      padding: 13px;
+      font-size: 0.95rem;
+      font-weight: 700;
+      font-family: inherit;
+      cursor: pointer;
+      transition: background 0.15s;
+      letter-spacing: 0.01em;
+    }
+    .btn:hover { background: #1445b8; }
+    .error {
+      background: #fef2f2;
+      border: 1px solid #fecaca;
+      border-radius: 10px;
+      padding: 10px 14px;
+      color: #b91c1c;
+      font-size: 0.84rem;
+      margin-bottom: 16px;
+      text-align: left;
+    }
+    .hint {
+      font-size: 0.78rem;
+      color: #9ca3af;
+      margin-top: 20px;
+    }
+    @media (max-width: 440px) {
+      .card { padding: 36px 24px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="brand">PDF<span>ocus</span></div>
+    <p class="subtitle">Ingresa tu token de acceso para continuar</p>
+
+    {% if error %}
+    <div class="error">{{ error }}</div>
+    {% endif %}
+
+    <form action="/acceso" method="get">
+      <label for="token">Token de acceso</label>
+      <input type="text" id="token" name="token" placeholder="XXXXXXXXXX" autocomplete="off" autocorrect="off" spellcheck="false" autofocus>
+      <button type="submit" class="btn">Entrar →</button>
+    </form>
+
+    <p class="hint">¿No tienes acceso? Contacta a tu administrador.</p>
+  </div>
+</body>
+</html>
