@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PDFocus — Admin</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Inter', system-ui, sans-serif;
+      background: #0d0f1a;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px 16px;
+    }
+    .card {
+      background: #1a1d2e;
+      border: 1px solid #2a2d40;
+      border-radius: 20px;
+      padding: 48px 40px;
+      width: 100%;
+      max-width: 380px;
+      text-align: center;
+    }
+    .brand {
+      font-size: 1.8rem;
+      font-weight: 800;
+      letter-spacing: -0.04em;
+      color: #4d7cf5;
+      margin-bottom: 4px;
+    }
+    .brand span { color: #e2e5ef; }
+    .badge {
+      display: inline-block;
+      background: #2a2d40;
+      color: #9ca3af;
+      font-size: 0.72rem;
+      font-weight: 600;
+      letter-spacing: 0.1em;
+      padding: 4px 10px;
+      border-radius: 20px;
+      text-transform: uppercase;
+      margin-bottom: 32px;
+    }
+    label {
+      display: block;
+      font-size: 0.78rem;
+      font-weight: 600;
+      color: #9ca3af;
+      text-align: left;
+      margin-bottom: 6px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    input[type="password"] {
+      width: 100%;
+      border: 1.5px solid #2a2d40;
+      border-radius: 10px;
+      padding: 12px 14px;
+      font-size: 0.95rem;
+      font-family: inherit;
+      color: #e2e5ef;
+      background: #0d0f1a;
+      transition: border-color 0.15s;
+      margin-bottom: 16px;
+    }
+    input[type="password"]:focus {
+      outline: none;
+      border-color: #4d7cf5;
+    }
+    .btn {
+      width: 100%;
+      background: #4d7cf5;
+      color: #fff;
+      border: none;
+      border-radius: 10px;
+      padding: 13px;
+      font-size: 0.95rem;
+      font-weight: 700;
+      font-family: inherit;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .btn:hover { background: #3b6ad4; }
+    .error {
+      background: rgba(185,28,28,0.15);
+      border: 1px solid rgba(185,28,28,0.3);
+      border-radius: 10px;
+      padding: 10px 14px;
+      color: #f87171;
+      font-size: 0.84rem;
+      margin-bottom: 16px;
+      text-align: left;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="brand">PDF<span>ocus</span></div>
+    <div class="badge">Panel Admin</div>
+
+    {% if error %}
+    <div class="error">{{ error }}</div>
+    {% endif %}
+
+    <form action="/admin/login" method="post">
+      <label for="admin_token">Token de administrador</label>
+      <input type="password" id="admin_token" name="admin_token" placeholder="••••••••••" autofocus>
+      <button type="submit" class="btn">Acceder</button>
+    </form>
+  </div>
+</body>
+</html>
