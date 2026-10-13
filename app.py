@@ -1,9 +1,11 @@
 """
 PDFocus Web — Felipe Ceballos
 Busca referencias en PDFs almacenados en Google Drive y los devuelve marcados.
-Sistema de login por token por empresa, almacenado en Google Sheets.
-Cache en disco: el índice se guarda en /tmp/pdfocus_index_cache.json
-para sobrevivir reinicios sin reconstruir desde cero.
+Sistema de login por token + contraseña por empresa, almacenado en Google Sheets.
+Cache en Google Drive: el índice se guarda en Drive para sobrevivir deploys.
+
+Estructura Google Sheets (usuarios_pdfocus):
+  A: empresa | B: token | C: activo (SI/NO) | D: fecha_creacion | E: password_hash
 """
 
 import os
@@ -20,13 +22,15 @@ from datetime import datetime
 import pymupdf as fitz
 from flask import (
     Flask, request, jsonify, send_file,
-    render_template, redirect, url_for, make_response
+    render_template, redirect, url_for, make_response, session
 )
+from werkzeug.security import generate_password_hash, check_password_hash
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseDownload
+from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
 
 app = Flask(__name__)
+app.secret_key = os.environ.get("SECRET_KEY", "pdfocus_secret_2026_xK9mN3pQ")
 
 # ── CONFIG ────────────────────────────────────────────────────
 FOLDER_ID_MANIFIESTOS = os.environ.get("FOLDER_MANIFIESTOS", "")
@@ -35,68 +39,31 @@ SERVICE_ACCOUNT_JSON  = os.environ.get("GOOGLE_SERVICE_ACCOUNT", "")
 ADMIN_TOKEN           = os.environ.get("ADMIN_TOKEN", "pdfocus_kino_2026")
 SHEETS_ID             = os.environ.get("SHEETS_ID", "1a-lIDPDbimXLVys0vS6keqls-fz4bCU1pq28qiZ2qJY")
 
-# Ruta del cache en disco (persiste entre reinicios del proceso en Render)
+# Nombre del archivo de caché en Google Drive
+DRIVE_CACHE_FILENAME  = "pdfocus_index_cache.json"
+
+# Ruta temporal para el caché local
 INDEX_CACHE_PATH = "/tmp/pdfocus_index_cache.json"
 
 # Cache en memoria
-_INDEX_CACHE = {}          # {section_key: {file_id: {name, compact, modified_time}}}
+_INDEX_CACHE = {}
 _INDEX_LOCK  = threading.Lock()
 _INDEX_BUILT = {"manifiestos": False, "facturas": False}
 
-# Cache de usuarios (se recarga desde Sheets en cada validación o cada 5 min)
-_USERS_CACHE  = {}           # {token: {empresa, activo, fecha_creacion}}
+# Cache de usuarios
+_USERS_CACHE  = {}
 _USERS_LOCK   = threading.Lock()
-_USERS_LOADED = {"ts": 0}    # timestamp última carga
+_USERS_LOADED = {"ts": 0}
 
 # Intervalo de actualización incremental (1 hora)
 _UPDATE_INTERVAL = 3600
-
-
-# ── CACHE EN DISCO ────────────────────────────────────────────
-def _save_index_to_disk():
-    """Guarda el índice en disco para sobrevivir reinicios."""
-    try:
-        with _INDEX_LOCK:
-            data = dict(_INDEX_CACHE)
-        # El compact puede ser muy grande; guardamos todo
-        with open(INDEX_CACHE_PATH, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False)
-        total = sum(len(v) for v in data.values())
-        print(f"[CACHE] Índice guardado en disco: {total} PDFs.", flush=True)
-    except Exception as e:
-        print(f"[CACHE] Error guardando índice en disco: {e}", flush=True)
-
-
-def _load_index_from_disk():
-    """Carga el índice desde disco si existe. Retorna True si lo cargó."""
-    if not os.path.exists(INDEX_CACHE_PATH):
-        print("[CACHE] No hay cache en disco.", flush=True)
-        return False
-    try:
-        with open(INDEX_CACHE_PATH, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        if not data:
-            print("[CACHE] Cache en disco vacío.", flush=True)
-            return False
-        with _INDEX_LOCK:
-            _INDEX_CACHE.clear()
-            _INDEX_CACHE.update(data)
-            for sec_key in ("manifiestos", "facturas"):
-                if sec_key in data and len(data[sec_key]) > 0:
-                    _INDEX_BUILT[sec_key] = True
-        total = sum(len(v) for v in data.values())
-        print(f"[CACHE] Índice cargado desde disco: {total} PDFs. ¡Inicio rápido!", flush=True)
-        return True
-    except Exception as e:
-        print(f"[CACHE] Error cargando índice desde disco: {e}", flush=True)
-        return False
 
 
 # ── GOOGLE SERVICES ───────────────────────────────────────────
 def _get_credentials():
     info = json.loads(SERVICE_ACCOUNT_JSON)
     scopes = [
-        "https://www.googleapis.com/auth/drive.readonly",
+        "https://www.googleapis.com/auth/drive",
         "https://www.googleapis.com/auth/spreadsheets",
     ]
     return service_account.Credentials.from_service_account_info(info, scopes=scopes)
@@ -112,32 +79,141 @@ def _get_sheets_service():
     return build("sheets", "v4", credentials=creds)
 
 
+# ── CACHÉ EN GOOGLE DRIVE ─────────────────────────────────────
+def _find_drive_cache_file_id(svc):
+    try:
+        result = svc.files().list(
+            q=f"name='{DRIVE_CACHE_FILENAME}' and trashed=false",
+            fields="files(id, name, modifiedTime)",
+            pageSize=5,
+        ).execute()
+        files = result.get("files", [])
+        return files[0]["id"] if files else None
+    except Exception as e:
+        print(f"[DRIVE-CACHE] Error buscando caché en Drive: {e}", flush=True)
+        return None
+
+
+def _save_index_to_drive():
+    try:
+        with _INDEX_LOCK:
+            data = dict(_INDEX_CACHE)
+        total = sum(len(v) for v in data.values())
+        if total == 0:
+            return
+        json_bytes = json.dumps(data, ensure_ascii=False).encode("utf-8")
+        buffer = io.BytesIO(json_bytes)
+        svc = _get_drive_service()
+        media = MediaIoBaseUpload(buffer, mimetype="application/json", resumable=False)
+        existing_id = _find_drive_cache_file_id(svc)
+        if existing_id:
+            svc.files().update(fileId=existing_id, media_body=media).execute()
+            print(f"[DRIVE-CACHE] Caché actualizado en Drive: {total} PDFs.", flush=True)
+        else:
+            file_metadata = {"name": DRIVE_CACHE_FILENAME, "mimeType": "application/json"}
+            svc.files().create(body=file_metadata, media_body=media, fields="id").execute()
+            print(f"[DRIVE-CACHE] Caché creado en Drive: {total} PDFs.", flush=True)
+    except Exception as e:
+        print(f"[DRIVE-CACHE] Error guardando caché en Drive: {e}", flush=True)
+
+
+def _load_index_from_drive():
+    try:
+        svc = _get_drive_service()
+        file_id = _find_drive_cache_file_id(svc)
+        if not file_id:
+            print("[DRIVE-CACHE] No hay caché en Drive.", flush=True)
+            return False
+        print(f"[DRIVE-CACHE] Descargando caché desde Drive...", flush=True)
+        req = svc.files().get_media(fileId=file_id)
+        buf = io.BytesIO()
+        dl = MediaIoBaseDownload(buf, req)
+        done = False
+        while not done:
+            _, done = dl.next_chunk()
+        buf.seek(0)
+        data = json.loads(buf.read().decode("utf-8"))
+        if not data:
+            return False
+        with _INDEX_LOCK:
+            _INDEX_CACHE.clear()
+            _INDEX_CACHE.update(data)
+            for sec_key in ("manifiestos", "facturas"):
+                if sec_key in data and len(data[sec_key]) > 0:
+                    _INDEX_BUILT[sec_key] = True
+        total = sum(len(v) for v in data.values())
+        print(f"[DRIVE-CACHE] ✅ Índice cargado desde Drive: {total} PDFs.", flush=True)
+        try:
+            with open(INDEX_CACHE_PATH, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False)
+        except Exception:
+            pass
+        return True
+    except Exception as e:
+        print(f"[DRIVE-CACHE] Error descargando caché: {e}", flush=True)
+        return False
+
+
+def _save_index_to_disk():
+    try:
+        with _INDEX_LOCK:
+            data = dict(_INDEX_CACHE)
+        with open(INDEX_CACHE_PATH, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+        total = sum(len(v) for v in data.values())
+        print(f"[CACHE-LOCAL] Copia local guardada: {total} PDFs.", flush=True)
+    except Exception as e:
+        print(f"[CACHE-LOCAL] Error guardando copia local: {e}", flush=True)
+
+
+def _load_index_from_disk():
+    if not os.path.exists(INDEX_CACHE_PATH):
+        return False
+    try:
+        with open(INDEX_CACHE_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not data:
+            return False
+        with _INDEX_LOCK:
+            _INDEX_CACHE.clear()
+            _INDEX_CACHE.update(data)
+            for sec_key in ("manifiestos", "facturas"):
+                if sec_key in data and len(data[sec_key]) > 0:
+                    _INDEX_BUILT[sec_key] = True
+        total = sum(len(v) for v in data.values())
+        print(f"[CACHE-LOCAL] Índice cargado desde /tmp: {total} PDFs.", flush=True)
+        return True
+    except Exception as e:
+        print(f"[CACHE-LOCAL] Error cargando desde /tmp: {e}", flush=True)
+        return False
+
+
 # ── GOOGLE SHEETS — USUARIOS ──────────────────────────────────
-# Estructura de la hoja "usuarios_pdfocus":
-# Columna A: empresa | B: token | C: activo (SI/NO) | D: fecha_creacion
+# Columnas: A=empresa, B=token, C=activo, D=fecha_creacion, E=password_hash
 
 def _load_users_from_sheets():
-    """Carga todos los usuarios activos desde Google Sheets."""
     try:
         svc = _get_sheets_service()
         result = svc.spreadsheets().values().get(
             spreadsheetId=SHEETS_ID,
-            range="usuarios_pdfocus!A2:D1000"
+            range="usuarios_pdfocus!A2:E1000"
         ).execute()
         rows = result.get("values", [])
         users = {}
         for row in rows:
             if len(row) < 3:
                 continue
-            empresa = row[0].strip() if row[0] else ""
-            token   = row[1].strip() if row[1] else ""
-            activo  = row[2].strip().upper() if row[2] else "NO"
-            fecha   = row[3].strip() if len(row) > 3 else ""
+            empresa       = row[0].strip() if row[0] else ""
+            token         = row[1].strip() if row[1] else ""
+            activo        = row[2].strip().upper() if row[2] else "NO"
+            fecha         = row[3].strip() if len(row) > 3 else ""
+            password_hash = row[4].strip() if len(row) > 4 else ""
             if token and activo == "SI":
                 users[token] = {
                     "empresa": empresa,
                     "activo": True,
                     "fecha_creacion": fecha,
+                    "password_hash": password_hash,
                 }
         return users
     except Exception as e:
@@ -146,7 +222,6 @@ def _load_users_from_sheets():
 
 
 def _get_users(force_reload=False):
-    """Devuelve el cache de usuarios, recargando si han pasado más de 5 minutos."""
     now = time.time()
     with _USERS_LOCK:
         if force_reload or (now - _USERS_LOADED["ts"]) > 300:
@@ -158,17 +233,16 @@ def _get_users(force_reload=False):
 
 
 def _add_user_to_sheets(empresa, token):
-    """Agrega una nueva empresa/token a Google Sheets."""
     fecha = datetime.now().strftime("%Y-%m-%d %H:%M")
     try:
         svc = _get_sheets_service()
+        # Columna E (password_hash) vacía al crear — admin la establece después
         svc.spreadsheets().values().append(
             spreadsheetId=SHEETS_ID,
-            range="usuarios_pdfocus!A:D",
+            range="usuarios_pdfocus!A:E",
             valueInputOption="RAW",
-            body={"values": [[empresa, token, "SI", fecha]]}
+            body={"values": [[empresa, token, "SI", fecha, ""]]}
         ).execute()
-        # Forzar recarga del cache
         _get_users(force_reload=True)
         return True
     except Exception as e:
@@ -176,8 +250,8 @@ def _add_user_to_sheets(empresa, token):
         return False
 
 
-def _set_user_status(token, activo):
-    """Activa o desactiva un token en Google Sheets."""
+def _set_user_password(token, new_password):
+    """Establece o cambia la contraseña de una empresa. Guarda el hash en columna E."""
     try:
         svc = _get_sheets_service()
         result = svc.spreadsheets().values().get(
@@ -187,7 +261,33 @@ def _set_user_status(token, activo):
         rows = result.get("values", [])
         for i, row in enumerate(rows):
             if row and row[0].strip() == token:
-                row_num = i + 2  # +2 porque empieza en fila 2
+                row_num = i + 2
+                hashed = generate_password_hash(new_password)
+                svc.spreadsheets().values().update(
+                    spreadsheetId=SHEETS_ID,
+                    range=f"usuarios_pdfocus!E{row_num}",
+                    valueInputOption="RAW",
+                    body={"values": [[hashed]]}
+                ).execute()
+                _get_users(force_reload=True)
+                return True
+        return False
+    except Exception as e:
+        print(f"[SHEETS] Error cambiando contraseña: {e}", flush=True)
+        return False
+
+
+def _set_user_status(token, activo):
+    try:
+        svc = _get_sheets_service()
+        result = svc.spreadsheets().values().get(
+            spreadsheetId=SHEETS_ID,
+            range="usuarios_pdfocus!B2:B1000"
+        ).execute()
+        rows = result.get("values", [])
+        for i, row in enumerate(rows):
+            if row and row[0].strip() == token:
+                row_num = i + 2
                 nuevo_estado = "SI" if activo else "NO"
                 svc.spreadsheets().values().update(
                     spreadsheetId=SHEETS_ID,
@@ -204,7 +304,6 @@ def _set_user_status(token, activo):
 
 
 def _delete_user_from_sheets(token):
-    """Elimina una fila de Google Sheets por token."""
     try:
         svc = _get_sheets_service()
         result = svc.spreadsheets().values().get(
@@ -240,25 +339,28 @@ def _delete_user_from_sheets(token):
 
 
 def _generate_token(length=10):
-    """Genera un token aleatorio alfanumérico en mayúsculas."""
     chars = string.ascii_uppercase + string.digits
     return "".join(secrets.choice(chars) for _ in range(length))
 
 
 def _validate_token(token):
-    """Valida si un token existe y está activo. Retorna empresa o None."""
+    """Valida si un token existe y está activo. Retorna info del usuario o None."""
     if not token:
         return None
     users = _get_users()
     user = users.get(token)
     if user and user.get("activo"):
-        return user["empresa"]
+        return user
     return None
 
 
-# ── GOOGLE DRIVE ──────────────────────────────────────────────
+def _is_authenticated(token):
+    """Verifica si el token está autenticado en la sesión Flask actual."""
+    return session.get("auth_token") == token
+
+
+# ── GOOGLE DRIVE — PDFs ───────────────────────────────────────
 def list_pdfs_in_folder(folder_id, include_modified_time=False):
-    """Lista todos los PDFs en la carpeta y sus subcarpetas (recursivo)."""
     svc = _get_drive_service()
 
     def _get_subfolders(fid):
@@ -304,7 +406,6 @@ def list_pdfs_in_folder(folder_id, include_modified_time=False):
         visited.add(fid)
         all_pdfs.extend(_get_pdfs(fid))
         queue.extend(_get_subfolders(fid))
-
     return all_pdfs
 
 
@@ -473,8 +574,8 @@ def build_index(folder_id, section_key):
         _INDEX_CACHE[section_key] = new_entries
         _INDEX_BUILT[section_key] = True
     print(f"[INDEX] {section_key}: {len(new_entries)} PDFs indexados. LISTO.", flush=True)
-    # Guardar en disco después de cada sección
     _save_index_to_disk()
+    _save_index_to_drive()
 
 
 def update_index_incremental(folder_id, section_key):
@@ -518,6 +619,7 @@ def update_index_incremental(folder_id, section_key):
 
     if nuevos > 0 or removed:
         _save_index_to_disk()
+        _save_index_to_drive()
 
     print(f"[UPDATE] {section_key}: {nuevos} nuevos/modificados, {len(removed)} eliminados. Total: {len(current)}.", flush=True)
 
@@ -652,14 +754,7 @@ def annotate_pdf_bytes(pdf_bytes, ref_raw, mode="manifesto"):
                 )
             for R in rects:
                 R2 = fitz.Rect(R.x0 - 1, R.y0 - 2, R.x1 + 1, R.y1 + 2)
-                pages[p].draw_rect(
-                    R2,
-                    color=color,
-                    fill=color,
-                    fill_opacity=0.40,
-                    width=0,
-                    overlay=True,
-                )
+                pages[p].draw_rect(R2, color=color, fill=color, fill_opacity=0.40, width=0, overlay=True)
                 try:
                     annot = pages[p].add_highlight_annot(R2)
                     annot.set_colors(stroke=color)
@@ -678,14 +773,23 @@ def annotate_pdf_bytes(pdf_bytes, ref_raw, mode="manifesto"):
 
 # ── DECORADOR DE AUTENTICACIÓN ────────────────────────────────
 def require_token(f):
-    """Decorador: requiere token válido en query param o cookie."""
+    """Decorador: requiere token válido + contraseña verificada en sesión."""
     from functools import wraps
     @wraps(f)
     def decorated(*args, **kwargs):
         token = request.args.get("token") or request.cookies.get("pdfocus_token")
-        empresa = _validate_token(token)
-        if not empresa:
+        user_info = _validate_token(token)
+        if not user_info:
             return redirect(url_for("login_page"))
+
+        # Si tiene contraseña configurada, verificar que esté autenticado en sesión
+        if user_info.get("password_hash"):
+            if not _is_authenticated(token):
+                # Guardar token en sesión para el login de contraseña
+                session["pending_token"] = token
+                return redirect(url_for("password_page"))
+
+        empresa = user_info["empresa"]
         return f(*args, empresa=empresa, token=token, **kwargs)
     return decorated
 
@@ -693,29 +797,72 @@ def require_token(f):
 # ── RUTAS PÚBLICAS ────────────────────────────────────────────
 @app.route("/login")
 def login_page():
-    """Página de login (redirección cuando no hay token válido)."""
     return render_template("login.html")
+
+
+@app.route("/password")
+def password_page():
+    """Página de ingreso de contraseña (cuando la empresa tiene contraseña configurada)."""
+    token = session.get("pending_token") or request.args.get("token") or request.cookies.get("pdfocus_token")
+    user_info = _validate_token(token)
+    if not user_info:
+        return redirect(url_for("login_page"))
+    # Si no tiene contraseña configurada aún, dar acceso directo
+    if not user_info.get("password_hash"):
+        session["auth_token"] = token
+        resp = make_response(redirect(url_for("index") + f"?token={token}"))
+        resp.set_cookie("pdfocus_token", token, max_age=60 * 60 * 24 * 30)
+        return resp
+    return render_template("password.html", empresa=user_info["empresa"], token=token)
+
+
+@app.route("/verificar_password", methods=["POST"])
+def verificar_password():
+    """Verifica la contraseña ingresada por el usuario."""
+    token    = request.form.get("token", "").strip()
+    password = request.form.get("password", "").strip()
+
+    user_info = _validate_token(token)
+    if not user_info:
+        return redirect(url_for("login_page"))
+
+    password_hash = user_info.get("password_hash", "")
+
+    if not password_hash:
+        # Sin contraseña configurada — acceso directo
+        session["auth_token"] = token
+        resp = make_response(redirect(url_for("index") + f"?token={token}"))
+        resp.set_cookie("pdfocus_token", token, max_age=60 * 60 * 24 * 30)
+        return resp
+
+    if check_password_hash(password_hash, password):
+        session["auth_token"] = token
+        session.permanent = True
+        resp = make_response(redirect(url_for("index") + f"?token={token}"))
+        resp.set_cookie("pdfocus_token", token, max_age=60 * 60 * 24 * 30)
+        return resp
+    else:
+        return render_template("password.html",
+                               empresa=user_info["empresa"],
+                               token=token,
+                               error="Contraseña incorrecta. Intenta de nuevo.")
 
 
 @app.route("/acceso")
 def acceso():
-    """
-    Valida el token que viene en la URL (?token=XYZ) y si es válido
-    setea una cookie de sesión y redirige a la app principal.
-    """
+    """Valida el token de la URL y redirige al flujo correcto."""
     token = request.args.get("token", "").strip()
-    empresa = _validate_token(token)
-    if not empresa:
+    user_info = _validate_token(token)
+    if not user_info:
         return render_template("login.html", error="Token inválido o inactivo.")
-    # Setear cookie con el token
+
     resp = make_response(redirect(url_for("index") + f"?token={token}"))
-    resp.set_cookie("pdfocus_token", token, max_age=60 * 60 * 24 * 30)  # 30 días
+    resp.set_cookie("pdfocus_token", token, max_age=60 * 60 * 24 * 30)
     return resp
 
 
 @app.route("/status")
 def status():
-    """Estado del índice — usado por UptimeRobot para keep-alive."""
     with _INDEX_LOCK:
         info = {
             sec: {
@@ -727,12 +874,11 @@ def status():
     return jsonify(info)
 
 
-# ── RUTAS PROTEGIDAS (requieren token) ────────────────────────
+# ── RUTAS PROTEGIDAS ──────────────────────────────────────────
 @app.route("/")
 @require_token
 def index(empresa=None, token=None):
     resp = make_response(render_template("index.html", empresa=empresa, token=token))
-    # Renovar cookie en cada visita
     resp.set_cookie("pdfocus_token", token, max_age=60 * 60 * 24 * 30)
     return resp
 
@@ -787,16 +933,12 @@ def ver_pdf(empresa=None, token=None):
     try:
         pdf_bytes = download_pdf_bytes(drive_id)
     except Exception as e:
-        print(f"[VER_PDF] Error descargando {drive_id}: {e}", flush=True)
         return f"No se pudo descargar el PDF: {e}", 500
 
     try:
         mode = "manifesto" if "manifest" in tipo or tipo == "manifesto" else "factura"
         marked_bytes, found = annotate_pdf_bytes(pdf_bytes, codigo, mode=mode)
-        if not found:
-            print(f"[VER_PDF] Referencia '{codigo}' no encontrada en {drive_id}", flush=True)
     except Exception as e:
-        print(f"[VER_PDF] Error anotando PDF {drive_id}: {e}", flush=True)
         marked_bytes = pdf_bytes
 
     return send_file(
@@ -809,14 +951,12 @@ def ver_pdf(empresa=None, token=None):
 
 # ── PANEL DE ADMINISTRACIÓN ───────────────────────────────────
 def _check_admin():
-    """Verifica si la petición tiene el token de admin válido (header o query param)."""
     token = request.headers.get("X-Admin-Token") or request.args.get("admin_token") or request.cookies.get("pdfocus_admin")
     return token == ADMIN_TOKEN
 
 
 @app.route("/admin")
 def admin_panel():
-    """Panel de administración — requiere ADMIN_TOKEN."""
     if not _check_admin():
         return render_template("admin_login.html")
     users = _get_users(force_reload=True)
@@ -837,7 +977,7 @@ def admin_login():
     if token != ADMIN_TOKEN:
         return render_template("admin_login.html", error="Token incorrecto.")
     resp = make_response(redirect(url_for("admin_panel")))
-    resp.set_cookie("pdfocus_admin", token, max_age=60 * 60 * 8)  # 8 horas
+    resp.set_cookie("pdfocus_admin", token, max_age=60 * 60 * 8)
     return resp
 
 
@@ -869,6 +1009,22 @@ def admin_agregar_empresa():
     return jsonify({"error": "No se pudo guardar en Sheets"}), 500
 
 
+@app.route("/admin/set_password", methods=["POST"])
+def admin_set_password():
+    """Establece o cambia la contraseña de una empresa."""
+    if not _check_admin():
+        return jsonify({"error": "No autorizado"}), 401
+    data     = request.get_json() or {}
+    token    = data.get("token", "").strip()
+    password = data.get("password", "").strip()
+    if not token or not password:
+        return jsonify({"error": "Token y contraseña requeridos"}), 400
+    if len(password) < 4:
+        return jsonify({"error": "La contraseña debe tener al menos 4 caracteres"}), 400
+    ok = _set_user_password(token, password)
+    return jsonify({"ok": ok})
+
+
 @app.route("/admin/toggle_empresa", methods=["POST"])
 def admin_toggle_empresa():
     if not _check_admin():
@@ -898,13 +1054,24 @@ def admin_rebuild_index():
         _INDEX_BUILT["manifiestos"] = False
         _INDEX_BUILT["facturas"]    = False
         _INDEX_CACHE.clear()
-    # Borrar cache en disco para forzar reconstrucción completa
     try:
         if os.path.exists(INDEX_CACHE_PATH):
             os.remove(INDEX_CACHE_PATH)
     except Exception:
         pass
-    threading.Thread(target=_rebuild_all, daemon=True).start()
+
+    def _delete_drive_cache_and_rebuild():
+        try:
+            svc = _get_drive_service()
+            file_id = _find_drive_cache_file_id(svc)
+            if file_id:
+                svc.files().delete(fileId=file_id).execute()
+                print("[DRIVE-CACHE] Caché en Drive eliminado.", flush=True)
+        except Exception as e:
+            print(f"[DRIVE-CACHE] Error eliminando caché: {e}", flush=True)
+        _rebuild_all()
+
+    threading.Thread(target=_delete_drive_cache_and_rebuild, daemon=True).start()
     return jsonify({"ok": True, "mensaje": "Reconstrucción iniciada."})
 
 
@@ -919,7 +1086,6 @@ def _rebuild_all():
 def _hourly_update_loop():
     while not (_INDEX_BUILT.get("manifiestos") and _INDEX_BUILT.get("facturas")):
         time.sleep(60)
-
     while True:
         time.sleep(_UPDATE_INTERVAL)
         print("[HOURLY] Iniciando actualización incremental...", flush=True)
@@ -940,51 +1106,48 @@ def _hourly_update_loop():
 def _start_index_background():
     def _build():
         print("[STARTUP] Iniciando construcción del índice...", flush=True)
-        print(f"[STARTUP] FOLDER_MANIFIESTOS={FOLDER_ID_MANIFIESTOS}", flush=True)
-        print(f"[STARTUP] FOLDER_FACTURAS={FOLDER_ID_FACTURAS}", flush=True)
-        print(f"[STARTUP] JSON len={len(SERVICE_ACCOUNT_JSON)}", flush=True)
         if not SERVICE_ACCOUNT_JSON:
             print("[STARTUP] ERROR: GOOGLE_SERVICE_ACCOUNT está vacío.", flush=True)
             return
 
-        # Intentar cargar desde cache en disco primero
-        cache_loaded = _load_index_from_disk()
-        if cache_loaded:
-            print("[STARTUP] Índice listo (desde cache en disco).", flush=True)
-            # Aún así hacer actualización incremental en background para nuevos PDFs
-            print("[STARTUP] Verificando cambios nuevos en Drive...", flush=True)
+        # 1. Caché local /tmp (reinicios rápidos)
+        if _load_index_from_disk():
+            print("[STARTUP] ✅ Índice desde /tmp.", flush=True)
             if FOLDER_ID_MANIFIESTOS:
-                try:
-                    update_index_incremental(FOLDER_ID_MANIFIESTOS, "manifiestos")
-                except Exception as e:
-                    print(f"[STARTUP] Error actualizando manifiestos: {e}", flush=True)
+                try: update_index_incremental(FOLDER_ID_MANIFIESTOS, "manifiestos")
+                except Exception as e: print(f"[STARTUP] {e}", flush=True)
             if FOLDER_ID_FACTURAS:
-                try:
-                    update_index_incremental(FOLDER_ID_FACTURAS, "facturas")
-                except Exception as e:
-                    print(f"[STARTUP] Error actualizando facturas: {e}", flush=True)
-            print("[STARTUP] Verificación de cambios completada.", flush=True)
+                try: update_index_incremental(FOLDER_ID_FACTURAS, "facturas")
+                except Exception as e: print(f"[STARTUP] {e}", flush=True)
             return
 
-        # No hay cache — construir desde cero
+        # 2. Caché en Drive (sobrevive deploys)
+        if _load_index_from_drive():
+            print("[STARTUP] ✅ Índice desde Drive.", flush=True)
+            if FOLDER_ID_MANIFIESTOS:
+                try: update_index_incremental(FOLDER_ID_MANIFIESTOS, "manifiestos")
+                except Exception as e: print(f"[STARTUP] {e}", flush=True)
+            if FOLDER_ID_FACTURAS:
+                try: update_index_incremental(FOLDER_ID_FACTURAS, "facturas")
+                except Exception as e: print(f"[STARTUP] {e}", flush=True)
+            return
+
+        # 3. Construir desde cero
+        print("[STARTUP] Sin caché. Construyendo desde cero...", flush=True)
         if FOLDER_ID_MANIFIESTOS:
-            try:
-                build_index(FOLDER_ID_MANIFIESTOS, "manifiestos")
+            try: build_index(FOLDER_ID_MANIFIESTOS, "manifiestos")
             except Exception as e:
-                print(f"[STARTUP] Error indexando manifiestos: {e}", flush=True)
+                print(f"[STARTUP] Error manifiestos: {e}", flush=True)
                 traceback.print_exc()
         if FOLDER_ID_FACTURAS:
-            try:
-                build_index(FOLDER_ID_FACTURAS, "facturas")
+            try: build_index(FOLDER_ID_FACTURAS, "facturas")
             except Exception as e:
-                print(f"[STARTUP] Error indexando facturas: {e}", flush=True)
+                print(f"[STARTUP] Error facturas: {e}", flush=True)
                 traceback.print_exc()
         print("[STARTUP] Índice listo.", flush=True)
 
-    t = threading.Thread(target=_build, daemon=True)
-    t.start()
-    t2 = threading.Thread(target=_hourly_update_loop, daemon=True)
-    t2.start()
+    threading.Thread(target=_build, daemon=True).start()
+    threading.Thread(target=_hourly_update_loop, daemon=True).start()
 
 
 _start_index_background()
