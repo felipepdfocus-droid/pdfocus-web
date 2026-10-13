@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PDFocus — Admin</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg: #0d0f1a;
+      --surface: #1a1d2e;
+      --border: #2a2d40;
+      --fg: #e2e5ef;
+      --fg2: #9ca3af;
+      --accent: #4d7cf5;
+      --green: #10b981;
+      --red: #ef4444;
+    }
+    body {
+      font-family: 'Inter', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--fg);
+      min-height: 100vh;
+    }
+
+    /* HEADER */
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 0 24px;
+      height: 56px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .brand { font-size: 1.2rem; font-weight: 800; letter-spacing: -0.04em; color: var(--accent); }
+    .brand span { color: var(--fg); }
+    .header-right { display: flex; align-items: center; gap: 12px; }
+    .badge-admin {
+      background: rgba(77,124,245,0.15);
+      color: var(--accent);
+      font-size: 0.72rem;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      padding: 4px 10px;
+      border-radius: 20px;
+      text-transform: uppercase;
+    }
+    .btn-logout {
+      font-size: 0.78rem;
+      font-weight: 600;
+      color: var(--fg2);
+      text-decoration: none;
+      padding: 5px 10px;
+      border-radius: 6px;
+      transition: color 0.15s;
+    }
+    .btn-logout:hover { color: var(--fg); }
+
+    /* MAIN */
+    main { padding: 32px 24px; max-width: 860px; margin: 0 auto; }
+    h2 { font-size: 1rem; font-weight: 700; margin-bottom: 16px; }
+
+    /* STATUS CARDS */
+    .status-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-bottom: 32px;
+    }
+    .stat-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 18px 20px;
+    }
+    .stat-label { font-size: 0.72rem; font-weight: 600; color: var(--fg2); text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: 6px; }
+    .stat-val { font-size: 1.5rem; font-weight: 800; color: var(--fg); }
+    .stat-sub { font-size: 0.75rem; color: var(--fg2); margin-top: 2px; }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 0.72rem;
+      font-weight: 700;
+      padding: 3px 9px;
+      border-radius: 20px;
+    }
+    .pill.listo { background: rgba(16,185,129,0.15); color: #10b981; }
+    .pill.cargando { background: rgba(245,158,11,0.15); color: #f59e0b; }
+
+    /* REBUILD */
+    .section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 16px;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+    .btn-rebuild {
+      font-size: 0.78rem;
+      font-weight: 600;
+      font-family: inherit;
+      background: rgba(77,124,245,0.12);
+      color: var(--accent);
+      border: 1px solid rgba(77,124,245,0.3);
+      border-radius: 8px;
+      padding: 7px 14px;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .btn-rebuild:hover { background: rgba(77,124,245,0.2); }
+
+    /* AGREGAR EMPRESA */
+    .add-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px 22px;
+      margin-bottom: 28px;
+    }
+    .add-card h2 { margin-bottom: 14px; }
+    .add-row {
+      display: flex;
+      gap: 10px;
+    }
+    input[type="text"] {
+      flex: 1;
+      border: 1.5px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-size: 0.9rem;
+      font-family: inherit;
+      color: var(--fg);
+      background: var(--bg);
+      transition: border-color 0.15s;
+      min-width: 0;
+    }
+    input[type="text"]:focus { outline: none; border-color: var(--accent); }
+    .btn-add {
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      padding: 10px 18px;
+      font-size: 0.88rem;
+      font-weight: 700;
+      font-family: inherit;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background 0.15s;
+    }
+    .btn-add:hover { background: #3b6ad4; }
+    .add-result {
+      margin-top: 14px;
+      background: rgba(16,185,129,0.1);
+      border: 1px solid rgba(16,185,129,0.25);
+      border-radius: 8px;
+      padding: 12px 14px;
+      font-size: 0.82rem;
+      display: none;
+    }
+    .add-result .tok { font-weight: 700; letter-spacing: 0.08em; color: var(--green); font-size: 1rem; }
+    .add-result .url-line { margin-top: 6px; word-break: break-all; color: var(--fg2); }
+    .add-result .copy-url {
+      display: inline-block;
+      margin-top: 8px;
+      font-size: 0.78rem;
+      font-weight: 600;
+      background: var(--border);
+      color: var(--fg);
+      border: none;
+      border-radius: 6px;
+      padding: 5px 10px;
+      cursor: pointer;
+      font-family: inherit;
+    }
+
+    /* TABLA EMPRESAS */
+    .table-wrap { overflow-x: auto; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.84rem;
+    }
+    thead tr {
+      background: var(--surface);
+    }
+    th {
+      text-align: left;
+      padding: 10px 14px;
+      font-size: 0.72rem;
+      font-weight: 700;
+      color: var(--fg2);
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      border-bottom: 1px solid var(--border);
+      white-space: nowrap;
+    }
+    td {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--border);
+      vertical-align: middle;
+    }
+    tr:last-child td { border-bottom: none; }
+    .td-empresa { font-weight: 600; }
+    .td-token {
+      font-family: 'Courier New', monospace;
+      font-size: 0.82rem;
+      letter-spacing: 0.08em;
+      color: var(--accent);
+    }
+    .td-fecha { color: var(--fg2); font-size: 0.8rem; }
+    .td-actions { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+    .btn-sm {
+      font-size: 0.74rem;
+      font-weight: 600;
+      font-family: inherit;
+      padding: 5px 10px;
+      border-radius: 6px;
+      border: 1px solid;
+      cursor: pointer;
+      transition: opacity 0.15s;
+    }
+    .btn-sm:hover { opacity: 0.75; }
+    .btn-sm.copy { background: transparent; border-color: var(--border); color: var(--fg2); }
+    .btn-sm.desact { background: transparent; border-color: var(--border); color: #f59e0b; }
+    .btn-sm.act { background: transparent; border-color: var(--border); color: var(--green); }
+    .btn-sm.del { background: transparent; border-color: var(--border); color: var(--red); }
+    .empty-row td { text-align: center; color: var(--fg2); padding: 28px; }
+
+    #notif {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      background: #1e2535;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px 16px;
+      font-size: 0.84rem;
+      color: var(--fg);
+      box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+      display: none;
+      z-index: 100;
+    }
+
+    @media (max-width: 540px) {
+      main { padding: 20px 14px; }
+      .status-grid { grid-template-columns: 1fr; }
+      .add-row { flex-direction: column; }
+      .btn-add { width: 100%; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="brand">PDF<span>ocus</span></div>
+  <div class="header-right">
+    <span class="badge-admin">Admin</span>
+    <a href="/admin/logout" class="btn-logout">Salir</a>
+  </div>
+</header>
+
+<main>
+  <!-- Estado del índice -->
+  <div class="section-header">
+    <h2>Estado del índice</h2>
+    <button class="btn-rebuild" onclick="rebuildIndex()">Reconstruir índice completo</button>
+  </div>
+  <div class="status-grid">
+    <div class="stat-card">
+      <div class="stat-label">Manifiestos</div>
+      <div class="stat-val">{{ index_info.manifiestos.pdfs }}</div>
+      <div class="stat-sub">
+        {% if index_info.manifiestos.listo %}
+          <span class="pill listo">● Listo</span>
+        {% else %}
+          <span class="pill cargando">⟳ Cargando…</span>
+        {% endif %}
+      </div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Facturas</div>
+      <div class="stat-val">{{ index_info.facturas.pdfs }}</div>
+      <div class="stat-sub">
+        {% if index_info.facturas.listo %}
+          <span class="pill listo">● Listo</span>
+        {% else %}
+          <span class="pill cargando">⟳ Cargando…</span>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <!-- Agregar empresa -->
+  <div class="add-card">
+    <h2>Agregar empresa</h2>
+    <div class="add-row">
+      <input type="text" id="nueva-empresa" placeholder="Nombre de la empresa" autocomplete="off">
+      <button class="btn-add" onclick="agregarEmpresa()">Crear acceso</button>
+    </div>
+    <div class="add-result" id="add-result">
+      <div>Empresa creada. Token: <span class="tok" id="tok-nuevo"></span></div>
+      <div class="url-line" id="url-nuevo"></div>
+      <button class="copy-url" onclick="copiarUrl()">Copiar URL de acceso</button>
+    </div>
+  </div>
+
+  <!-- Tabla de empresas -->
+  <div class="section-header">
+    <h2>Empresas con acceso</h2>
+  </div>
+  <div class="table-wrap">
+    <table id="tabla-empresas">
+      <thead>
+        <tr>
+          <th>Empresa</th>
+          <th>Token</th>
+          <th>Creación</th>
+          <th>Acciones</th>
+        </tr>
+      </thead>
+      <tbody id="tbody-empresas">
+        {% if users %}
+          {% for token, u in users.items() %}
+          <tr id="row-{{ token }}">
+            <td class="td-empresa">{{ u.empresa }}</td>
+            <td class="td-token">{{ token }}</td>
+            <td class="td-fecha">{{ u.fecha_creacion }}</td>
+            <td class="td-actions">
+              <button class="btn-sm copy" onclick="copiarToken('{{ token }}')">Copiar URL</button>
+              <button class="btn-sm desact" onclick="toggleEmpresa('{{ token }}', false)">Desactivar</button>
+              <button class="btn-sm del" onclick="eliminarEmpresa('{{ token }}', '{{ u.empresa }}')">Eliminar</button>
+            </td>
+          </tr>
+          {% endfor %}
+        {% else %}
+          <tr class="empty-row"><td colspan="4">No hay empresas registradas.</td></tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+</main>
+
+<div id="notif"></div>
+
+<script>
+  const BASE = window.location.origin;
+  let lastUrl = "";
+
+  function notif(msg, ms=2800) {
+    const el = document.getElementById("notif");
+    el.textContent = msg;
+    el.style.display = "block";
+    setTimeout(() => el.style.display = "none", ms);
+  }
+
+  async function agregarEmpresa() {
+    const empresa = document.getElementById("nueva-empresa").value.trim();
+    if (!empresa) { notif("Escribe el nombre de la empresa"); return; }
+    const r = await fetch("/admin/agregar_empresa?admin_token=" + getCookie("pdfocus_admin"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ empresa })
+    });
+    const d = await r.json();
+    if (!d.ok) { notif("Error: " + (d.error || "desconocido")); return; }
+    lastUrl = d.url;
+    document.getElementById("tok-nuevo").textContent = d.token;
+    document.getElementById("url-nuevo").textContent = d.url;
+    document.getElementById("add-result").style.display = "block";
+    document.getElementById("nueva-empresa").value = "";
+    // Agregar fila a la tabla
+    const tbody = document.getElementById("tbody-empresas");
+    const emptyRow = tbody.querySelector(".empty-row");
+    if (emptyRow) emptyRow.remove();
+    const tr = document.createElement("tr");
+    tr.id = "row-" + d.token;
+    tr.innerHTML = `
+      <td class="td-empresa">${escHtml(d.empresa)}</td>
+      <td class="td-token">${escHtml(d.token)}</td>
+      <td class="td-fecha">${new Date().toISOString().slice(0,16).replace("T"," ")}</td>
+      <td class="td-actions">
+        <button class="btn-sm copy" onclick="copiarToken('${d.token}')">Copiar URL</button>
+        <button class="btn-sm desact" onclick="toggleEmpresa('${d.token}', false)">Desactivar</button>
+        <button class="btn-sm del" onclick="eliminarEmpresa('${d.token}', '${escHtml(d.empresa)}')">Eliminar</button>
+      </td>`;
+    tbody.appendChild(tr);
+    notif("✓ Empresa creada: " + d.empresa);
+  }
+
+  function copiarUrl() {
+    navigator.clipboard.writeText(lastUrl).then(() => notif("✓ URL copiada")).catch(() => {
+      const el = document.getElementById("url-nuevo");
+      const range = document.createRange();
+      range.selectNode(el);
+      window.getSelection().removeAllRanges();
+      window.getSelection().addRange(range);
+    });
+  }
+
+  function copiarToken(token) {
+    const url = BASE + "/?token=" + token;
+    navigator.clipboard.writeText(url).then(() => notif("✓ URL copiada")).catch(() => notif("URL: " + url));
+  }
+
+  async function toggleEmpresa(token, activo) {
+    const r = await fetch("/admin/toggle_empresa?admin_token=" + getCookie("pdfocus_admin"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token, activo })
+    });
+    const d = await r.json();
+    notif(d.ok ? (activo ? "✓ Empresa activada" : "✓ Empresa desactivada") : "Error al cambiar estado");
+  }
+
+  async function eliminarEmpresa(token, empresa) {
+    if (!confirm(`¿Eliminar empresa "${empresa}"? Esta acción no se puede deshacer.`)) return;
+    const r = await fetch("/admin/eliminar_empresa?admin_token=" + getCookie("pdfocus_admin"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token })
+    });
+    const d = await r.json();
+    if (d.ok) {
+      const row = document.getElementById("row-" + token);
+      if (row) row.remove();
+      notif("✓ Empresa eliminada");
+    } else {
+      notif("Error al eliminar");
+    }
+  }
+
+  async function rebuildIndex() {
+    if (!confirm("¿Reconstruir el índice completo? Puede tardar varios minutos.")) return;
+    const r = await fetch("/admin/rebuild_index?admin_token=" + getCookie("pdfocus_admin"), { method: "POST" });
+    const d = await r.json();
+    notif(d.ok ? "⟳ Reconstrucción iniciada" : "Error: " + d.error);
+  }
+
+  function getCookie(name) {
+    const match = document.cookie.match(new RegExp("(^| )" + name + "=([^;]+)"));
+    return match ? match[2] : "";
+  }
+
+  function escHtml(s) {
+    return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+  }
+</script>
+
+</body>
+</html>
