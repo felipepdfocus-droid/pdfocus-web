@@ -1,455 +1,645 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>PDFocus — Admin</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PDFocus Admin</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    :root {
-      --bg: #0d0f1a;
-      --surface: #1a1d2e;
-      --border: #2a2d40;
-      --fg: #e2e5ef;
-      --fg2: #9ca3af;
-      --accent: #4d7cf5;
-      --green: #10b981;
-      --red: #ef4444;
-    }
+
     body {
-      font-family: 'Inter', system-ui, sans-serif;
-      background: var(--bg);
-      color: var(--fg);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #0f1117;
+      color: #e2e8f0;
       min-height: 100vh;
     }
 
-    /* HEADER */
-    header {
-      background: var(--surface);
-      border-bottom: 1px solid var(--border);
+    /* NAV */
+    nav {
+      background: #1a1d27;
+      border-bottom: 1px solid #2d3148;
       padding: 0 24px;
       height: 56px;
       display: flex;
       align-items: center;
       justify-content: space-between;
-    }
-    .brand { font-size: 1.2rem; font-weight: 800; letter-spacing: -0.04em; color: var(--accent); }
-    .brand span { color: var(--fg); }
-    .header-right { display: flex; align-items: center; gap: 12px; }
-    .badge-admin {
-      background: rgba(77,124,245,0.15);
-      color: var(--accent);
-      font-size: 0.72rem;
-      font-weight: 700;
-      letter-spacing: 0.08em;
-      padding: 4px 10px;
-      border-radius: 20px;
-      text-transform: uppercase;
-    }
-    .btn-logout {
-      font-size: 0.78rem;
-      font-weight: 600;
-      color: var(--fg2);
-      text-decoration: none;
-      padding: 5px 10px;
-      border-radius: 6px;
-      transition: color 0.15s;
-    }
-    .btn-logout:hover { color: var(--fg); }
-
-    /* MAIN */
-    main { padding: 32px 24px; max-width: 860px; margin: 0 auto; }
-    h2 { font-size: 1rem; font-weight: 700; margin-bottom: 16px; }
-
-    /* STATUS CARDS */
-    .status-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 12px;
-      margin-bottom: 32px;
-    }
-    .stat-card {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 18px 20px;
-    }
-    .stat-label { font-size: 0.72rem; font-weight: 600; color: var(--fg2); text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: 6px; }
-    .stat-val { font-size: 1.5rem; font-weight: 800; color: var(--fg); }
-    .stat-sub { font-size: 0.75rem; color: var(--fg2); margin-top: 2px; }
-    .pill {
-      display: inline-flex;
-      align-items: center;
-      gap: 5px;
-      font-size: 0.72rem;
-      font-weight: 700;
-      padding: 3px 9px;
-      border-radius: 20px;
-    }
-    .pill.listo { background: rgba(16,185,129,0.15); color: #10b981; }
-    .pill.cargando { background: rgba(245,158,11,0.15); color: #f59e0b; }
-
-    /* REBUILD */
-    .section-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      margin-bottom: 16px;
-      flex-wrap: wrap;
-      gap: 10px;
-    }
-    .btn-rebuild {
-      font-size: 0.78rem;
-      font-weight: 600;
-      font-family: inherit;
-      background: rgba(77,124,245,0.12);
-      color: var(--accent);
-      border: 1px solid rgba(77,124,245,0.3);
-      border-radius: 8px;
-      padding: 7px 14px;
-      cursor: pointer;
-      transition: background 0.15s;
-    }
-    .btn-rebuild:hover { background: rgba(77,124,245,0.2); }
-
-    /* AGREGAR EMPRESA */
-    .add-card {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 20px 22px;
-      margin-bottom: 28px;
-    }
-    .add-card h2 { margin-bottom: 14px; }
-    .add-row {
-      display: flex;
-      gap: 10px;
-    }
-    input[type="text"] {
-      flex: 1;
-      border: 1.5px solid var(--border);
-      border-radius: 8px;
-      padding: 10px 12px;
-      font-size: 0.9rem;
-      font-family: inherit;
-      color: var(--fg);
-      background: var(--bg);
-      transition: border-color 0.15s;
-      min-width: 0;
-    }
-    input[type="text"]:focus { outline: none; border-color: var(--accent); }
-    .btn-add {
-      background: var(--accent);
-      color: #fff;
-      border: none;
-      border-radius: 8px;
-      padding: 10px 18px;
-      font-size: 0.88rem;
-      font-weight: 700;
-      font-family: inherit;
-      cursor: pointer;
-      white-space: nowrap;
-      transition: background 0.15s;
-    }
-    .btn-add:hover { background: #3b6ad4; }
-    .add-result {
-      margin-top: 14px;
-      background: rgba(16,185,129,0.1);
-      border: 1px solid rgba(16,185,129,0.25);
-      border-radius: 8px;
-      padding: 12px 14px;
-      font-size: 0.82rem;
-      display: none;
-    }
-    .add-result .tok { font-weight: 700; letter-spacing: 0.08em; color: var(--green); font-size: 1rem; }
-    .add-result .url-line { margin-top: 6px; word-break: break-all; color: var(--fg2); }
-    .add-result .copy-url {
-      display: inline-block;
-      margin-top: 8px;
-      font-size: 0.78rem;
-      font-weight: 600;
-      background: var(--border);
-      color: var(--fg);
-      border: none;
-      border-radius: 6px;
-      padding: 5px 10px;
-      cursor: pointer;
-      font-family: inherit;
-    }
-
-    /* TABLA EMPRESAS */
-    .table-wrap { overflow-x: auto; }
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 0.84rem;
-    }
-    thead tr {
-      background: var(--surface);
-    }
-    th {
-      text-align: left;
-      padding: 10px 14px;
-      font-size: 0.72rem;
-      font-weight: 700;
-      color: var(--fg2);
-      text-transform: uppercase;
-      letter-spacing: 0.07em;
-      border-bottom: 1px solid var(--border);
-      white-space: nowrap;
-    }
-    td {
-      padding: 12px 14px;
-      border-bottom: 1px solid var(--border);
-      vertical-align: middle;
-    }
-    tr:last-child td { border-bottom: none; }
-    .td-empresa { font-weight: 600; }
-    .td-token {
-      font-family: 'Courier New', monospace;
-      font-size: 0.82rem;
-      letter-spacing: 0.08em;
-      color: var(--accent);
-    }
-    .td-fecha { color: var(--fg2); font-size: 0.8rem; }
-    .td-actions { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
-    .btn-sm {
-      font-size: 0.74rem;
-      font-weight: 600;
-      font-family: inherit;
-      padding: 5px 10px;
-      border-radius: 6px;
-      border: 1px solid;
-      cursor: pointer;
-      transition: opacity 0.15s;
-    }
-    .btn-sm:hover { opacity: 0.75; }
-    .btn-sm.copy { background: transparent; border-color: var(--border); color: var(--fg2); }
-    .btn-sm.desact { background: transparent; border-color: var(--border); color: #f59e0b; }
-    .btn-sm.act { background: transparent; border-color: var(--border); color: var(--green); }
-    .btn-sm.del { background: transparent; border-color: var(--border); color: var(--red); }
-    .empty-row td { text-align: center; color: var(--fg2); padding: 28px; }
-
-    #notif {
-      position: fixed;
-      bottom: 24px;
-      right: 24px;
-      background: #1e2535;
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 12px 16px;
-      font-size: 0.84rem;
-      color: var(--fg);
-      box-shadow: 0 4px 20px rgba(0,0,0,0.4);
-      display: none;
+      position: sticky;
+      top: 0;
       z-index: 100;
     }
 
-    @media (max-width: 540px) {
-      main { padding: 20px 14px; }
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 18px;
+      font-weight: 700;
+      color: #fff;
+      text-decoration: none;
+    }
+
+    .logo span { color: #3b82f6; }
+
+    .nav-right { display: flex; align-items: center; gap: 12px; }
+
+    .badge-admin {
+      background: rgba(59,130,246,0.15);
+      color: #60a5fa;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 3px 10px;
+      border-radius: 20px;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+    }
+
+    .btn-logout {
+      background: none;
+      border: 1px solid #2d3148;
+      color: #94a3b8;
+      font-size: 13px;
+      padding: 6px 14px;
+      border-radius: 8px;
+      cursor: pointer;
+      text-decoration: none;
+      transition: all 0.2s;
+    }
+
+    .btn-logout:hover { border-color: #475569; color: #e2e8f0; }
+
+    /* LAYOUT */
+    main { max-width: 960px; margin: 0 auto; padding: 32px 24px; }
+
+    /* CARDS DE ESTADO */
+    .status-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      margin-bottom: 32px;
+    }
+
+    .status-card {
+      background: #1a1d27;
+      border: 1px solid #2d3148;
+      border-radius: 12px;
+      padding: 20px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .status-card .label {
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.8px;
+      text-transform: uppercase;
+      color: #475569;
+      margin-bottom: 4px;
+    }
+
+    .status-card .count {
+      font-size: 32px;
+      font-weight: 700;
+      color: #f1f5f9;
+      line-height: 1;
+    }
+
+    .dot {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 12px;
+      font-weight: 500;
+      padding: 3px 10px;
+      border-radius: 20px;
+      margin-top: 6px;
+    }
+
+    .dot.ok  { background: rgba(34,197,94,0.12); color: #4ade80; }
+    .dot.no  { background: rgba(239,68,68,0.12); color: #f87171; }
+    .dot::before { content: "•"; font-size: 16px; }
+
+    .btn-rebuild {
+      background: none;
+      border: 1px solid #3b82f6;
+      color: #60a5fa;
+      font-size: 13px;
+      padding: 8px 16px;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.2s;
+      white-space: nowrap;
+    }
+
+    .btn-rebuild:hover { background: rgba(59,130,246,0.1); }
+
+    .rebuild-row {
+      display: flex;
+      justify-content: flex-end;
+      margin-bottom: 32px;
+    }
+
+    /* SECCIÓN */
+    section {
+      background: #1a1d27;
+      border: 1px solid #2d3148;
+      border-radius: 12px;
+      margin-bottom: 24px;
+      overflow: hidden;
+    }
+
+    .section-header {
+      padding: 20px 24px;
+      border-bottom: 1px solid #2d3148;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .section-header h2 {
+      font-size: 16px;
+      font-weight: 600;
+      color: #f1f5f9;
+    }
+
+    /* FORM AGREGAR */
+    .add-form {
+      padding: 20px 24px;
+      display: flex;
+      gap: 12px;
+    }
+
+    .add-form input {
+      flex: 1;
+      background: #0f1117;
+      border: 1px solid #2d3148;
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-size: 14px;
+      color: #f1f5f9;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    .add-form input::placeholder { color: #334155; }
+    .add-form input:focus { border-color: #3b82f6; }
+
+    .btn-primary {
+      background: #3b82f6;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      padding: 10px 20px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: opacity 0.2s;
+    }
+
+    .btn-primary:hover { opacity: 0.9; }
+
+    /* TABLA */
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+
+    thead th {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+      color: #475569;
+      padding: 12px 24px;
+      text-align: left;
+      border-bottom: 1px solid #2d3148;
+    }
+
+    tbody tr {
+      border-bottom: 1px solid #1e2235;
+      transition: background 0.15s;
+    }
+
+    tbody tr:last-child { border-bottom: none; }
+    tbody tr:hover { background: rgba(255,255,255,0.02); }
+
+    td {
+      padding: 14px 24px;
+      font-size: 14px;
+      color: #cbd5e1;
+      vertical-align: middle;
+    }
+
+    td.empresa { font-weight: 600; color: #f1f5f9; }
+
+    .token-text {
+      font-family: "SF Mono", "Fira Code", monospace;
+      font-size: 12px;
+      color: #60a5fa;
+      background: rgba(59,130,246,0.08);
+      padding: 3px 8px;
+      border-radius: 5px;
+    }
+
+    /* ACCIONES */
+    .actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+
+    .btn-sm {
+      font-size: 12px;
+      font-weight: 500;
+      padding: 5px 12px;
+      border-radius: 6px;
+      cursor: pointer;
+      border: 1px solid transparent;
+      transition: all 0.2s;
+      white-space: nowrap;
+    }
+
+    .btn-copy   { background: rgba(100,116,139,0.12); border-color: #334155; color: #94a3b8; }
+    .btn-copy:hover { background: rgba(100,116,139,0.2); color: #cbd5e1; }
+
+    .btn-pass   { background: rgba(168,85,247,0.1); border-color: rgba(168,85,247,0.3); color: #c084fc; }
+    .btn-pass:hover { background: rgba(168,85,247,0.2); }
+
+    .btn-deact  { background: rgba(234,179,8,0.1); border-color: rgba(234,179,8,0.3); color: #facc15; }
+    .btn-deact:hover { background: rgba(234,179,8,0.2); }
+
+    .btn-act    { background: rgba(34,197,94,0.1); border-color: rgba(34,197,94,0.3); color: #4ade80; }
+    .btn-act:hover { background: rgba(34,197,94,0.2); }
+
+    .btn-del    { background: rgba(239,68,68,0.1); border-color: rgba(239,68,68,0.3); color: #f87171; }
+    .btn-del:hover { background: rgba(239,68,68,0.2); }
+
+    .pw-set   { color: #4ade80; font-size: 11px; }
+    .pw-unset { color: #64748b; font-size: 11px; }
+
+    /* TOAST */
+    #toast {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      background: #1e2235;
+      border: 1px solid #2d3148;
+      color: #e2e8f0;
+      font-size: 14px;
+      padding: 12px 20px;
+      border-radius: 10px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+      transform: translateY(80px);
+      opacity: 0;
+      transition: all 0.3s cubic-bezier(0.34,1.56,0.64,1);
+      z-index: 9999;
+      max-width: 320px;
+    }
+
+    #toast.show { transform: translateY(0); opacity: 1; }
+    #toast.ok  { border-color: rgba(34,197,94,0.4); }
+    #toast.err { border-color: rgba(239,68,68,0.4); }
+
+    /* MODAL CONTRASEÑA */
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.6);
+      backdrop-filter: blur(4px);
+      z-index: 500;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .modal-overlay.open { display: flex; }
+
+    .modal {
+      background: #1a1d27;
+      border: 1px solid #2d3148;
+      border-radius: 14px;
+      padding: 32px;
+      width: 100%;
+      max-width: 380px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+    }
+
+    .modal h3 {
+      font-size: 17px;
+      font-weight: 600;
+      color: #f1f5f9;
+      margin-bottom: 6px;
+    }
+
+    .modal p {
+      font-size: 13px;
+      color: #64748b;
+      margin-bottom: 24px;
+    }
+
+    .modal label {
+      display: block;
+      font-size: 12px;
+      font-weight: 500;
+      color: #94a3b8;
+      margin-bottom: 6px;
+    }
+
+    .modal input {
+      width: 100%;
+      background: #0f1117;
+      border: 1px solid #2d3148;
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-size: 14px;
+      color: #f1f5f9;
+      outline: none;
+      margin-bottom: 16px;
+      transition: border-color 0.2s;
+    }
+
+    .modal input:focus { border-color: #3b82f6; }
+
+    .modal-actions { display: flex; gap: 10px; justify-content: flex-end; }
+
+    .btn-cancel {
+      background: none;
+      border: 1px solid #2d3148;
+      color: #64748b;
+      font-size: 13px;
+      padding: 8px 16px;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+
+    .btn-save {
+      background: #8b5cf6;
+      color: #fff;
+      border: none;
+      font-size: 13px;
+      font-weight: 600;
+      padding: 8px 20px;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+
+    .btn-save:hover { opacity: 0.9; }
+
+    /* EMPTY */
+    .empty {
+      padding: 40px;
+      text-align: center;
+      color: #334155;
+      font-size: 14px;
+    }
+
+    @media (max-width: 600px) {
       .status-grid { grid-template-columns: 1fr; }
-      .add-row { flex-direction: column; }
-      .btn-add { width: 100%; }
+      .add-form { flex-direction: column; }
+      thead th:nth-child(3), td:nth-child(3) { display: none; }
     }
   </style>
 </head>
 <body>
 
-<header>
-  <div class="brand">PDF<span>ocus</span></div>
-  <div class="header-right">
+<nav>
+  <a href="/admin" class="logo">PDF<span>ocus</span></a>
+  <div class="nav-right">
     <span class="badge-admin">Admin</span>
     <a href="/admin/logout" class="btn-logout">Salir</a>
   </div>
-</header>
+</nav>
 
 <main>
+
   <!-- Estado del índice -->
-  <div class="section-header">
-    <h2>Estado del índice</h2>
-    <button class="btn-rebuild" onclick="rebuildIndex()">Reconstruir índice completo</button>
-  </div>
   <div class="status-grid">
-    <div class="stat-card">
-      <div class="stat-label">Manifiestos</div>
-      <div class="stat-val">{{ index_info.manifiestos.pdfs }}</div>
-      <div class="stat-sub">
-        {% if index_info.manifiestos.listo %}
-          <span class="pill listo">● Listo</span>
-        {% else %}
-          <span class="pill cargando">⟳ Cargando…</span>
-        {% endif %}
+    <div class="status-card">
+      <div>
+        <div class="label">Manifiestos</div>
+        <div class="count">{{ index_info.manifiestos.pdfs }}</div>
+        <div class="dot {{ 'ok' if index_info.manifiestos.listo else 'no' }}">
+          {{ 'Listo' if index_info.manifiestos.listo else 'Cargando' }}
+        </div>
       </div>
     </div>
-    <div class="stat-card">
-      <div class="stat-label">Facturas</div>
-      <div class="stat-val">{{ index_info.facturas.pdfs }}</div>
-      <div class="stat-sub">
-        {% if index_info.facturas.listo %}
-          <span class="pill listo">● Listo</span>
-        {% else %}
-          <span class="pill cargando">⟳ Cargando…</span>
-        {% endif %}
+    <div class="status-card">
+      <div>
+        <div class="label">Facturas</div>
+        <div class="count">{{ index_info.facturas.pdfs }}</div>
+        <div class="dot {{ 'ok' if index_info.facturas.listo else 'no' }}">
+          {{ 'Listo' if index_info.facturas.listo else 'Cargando' }}
+        </div>
       </div>
     </div>
+  </div>
+
+  <div class="rebuild-row">
+    <button class="btn-rebuild" onclick="rebuildIndex()">⟳ Reconstruir índice completo</button>
   </div>
 
   <!-- Agregar empresa -->
-  <div class="add-card">
-    <h2>Agregar empresa</h2>
-    <div class="add-row">
-      <input type="text" id="nueva-empresa" placeholder="Nombre de la empresa" autocomplete="off">
-      <button class="btn-add" onclick="agregarEmpresa()">Crear acceso</button>
+  <section>
+    <div class="section-header">
+      <h2>Agregar empresa</h2>
     </div>
-    <div class="add-result" id="add-result">
-      <div>Empresa creada. Token: <span class="tok" id="tok-nuevo"></span></div>
-      <div class="url-line" id="url-nuevo"></div>
-      <button class="copy-url" onclick="copiarUrl()">Copiar URL de acceso</button>
+    <div class="add-form">
+      <input type="text" id="nueva-empresa" placeholder="Nombre de la empresa" />
+      <button class="btn-primary" onclick="agregarEmpresa()">Crear acceso</button>
     </div>
-  </div>
+  </section>
 
   <!-- Tabla de empresas -->
-  <div class="section-header">
-    <h2>Empresas con acceso</h2>
-  </div>
-  <div class="table-wrap">
-    <table id="tabla-empresas">
+  <section>
+    <div class="section-header">
+      <h2>Empresas con acceso</h2>
+    </div>
+
+    {% if users %}
+    <table>
       <thead>
         <tr>
           <th>Empresa</th>
           <th>Token</th>
+          <th>Contraseña</th>
           <th>Creación</th>
           <th>Acciones</th>
         </tr>
       </thead>
-      <tbody id="tbody-empresas">
-        {% if users %}
-          {% for token, u in users.items() %}
-          <tr id="row-{{ token }}">
-            <td class="td-empresa">{{ u.empresa }}</td>
-            <td class="td-token">{{ token }}</td>
-            <td class="td-fecha">{{ u.fecha_creacion }}</td>
-            <td class="td-actions">
-              <button class="btn-sm copy" onclick="copiarToken('{{ token }}')">Copiar URL</button>
-              <button class="btn-sm desact" onclick="toggleEmpresa('{{ token }}', false)">Desactivar</button>
-              <button class="btn-sm del" onclick="eliminarEmpresa('{{ token }}', '{{ u.empresa }}')">Eliminar</button>
-            </td>
-          </tr>
-          {% endfor %}
-        {% else %}
-          <tr class="empty-row"><td colspan="4">No hay empresas registradas.</td></tr>
-        {% endif %}
+      <tbody>
+        {% for token, u in users.items() %}
+        <tr id="row-{{ token }}">
+          <td class="empresa">{{ u.empresa }}</td>
+          <td><span class="token-text">{{ token }}</span></td>
+          <td>
+            {% if u.password_hash %}
+              <span class="pw-set">✓ Configurada</span>
+            {% else %}
+              <span class="pw-unset">Sin contraseña</span>
+            {% endif %}
+          </td>
+          <td>{{ u.fecha_creacion }}</td>
+          <td>
+            <div class="actions">
+              <button class="btn-sm btn-copy"
+                onclick="copyURL('{{ token }}')">Copiar URL</button>
+              <button class="btn-sm btn-pass"
+                onclick="openPasswordModal('{{ token }}', '{{ u.empresa }}')">🔑 Contraseña</button>
+              <button class="btn-sm btn-deact"
+                onclick="toggleEmpresa('{{ token }}', false)">Desactivar</button>
+              <button class="btn-sm btn-del"
+                onclick="eliminarEmpresa('{{ token }}', '{{ u.empresa }}')">Eliminar</button>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
       </tbody>
     </table>
-  </div>
+    {% else %}
+    <div class="empty">No hay empresas registradas todavía.</div>
+    {% endif %}
+  </section>
+
 </main>
 
-<div id="notif"></div>
+<!-- Modal contraseña -->
+<div class="modal-overlay" id="pw-modal">
+  <div class="modal">
+    <h3>Establecer contraseña</h3>
+    <p id="pw-modal-subtitle">Define la clave de acceso para esta empresa.</p>
+    <input type="hidden" id="pw-token" />
+    <label>Nueva contraseña</label>
+    <input type="text" id="pw-input" placeholder="Mínimo 4 caracteres" autocomplete="off" />
+    <div class="modal-actions">
+      <button class="btn-cancel" onclick="closePasswordModal()">Cancelar</button>
+      <button class="btn-save" onclick="savePassword()">Guardar</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
 
 <script>
-  const BASE = window.location.origin;
-  let lastUrl = "";
+  const BASE = "";
 
-  function notif(msg, ms=2800) {
-    const el = document.getElementById("notif");
-    el.textContent = msg;
-    el.style.display = "block";
-    setTimeout(() => el.style.display = "none", ms);
+  function toast(msg, ok = true) {
+    const t = document.getElementById("toast");
+    t.textContent = msg;
+    t.className = "show " + (ok ? "ok" : "err");
+    clearTimeout(t._timer);
+    t._timer = setTimeout(() => t.className = "", 3000);
+  }
+
+  function copyURL(token) {
+    const url = `https://pdfocus-web-1sbt.onrender.com/?token=${token}`;
+    navigator.clipboard.writeText(url)
+      .then(() => toast("URL copiada al portapapeles ✓"))
+      .catch(() => {
+        prompt("Copia esta URL:", url);
+      });
   }
 
   async function agregarEmpresa() {
-    const empresa = document.getElementById("nueva-empresa").value.trim();
-    if (!empresa) { notif("Escribe el nombre de la empresa"); return; }
-    const r = await fetch("/admin/agregar_empresa?admin_token=" + getCookie("pdfocus_admin"), {
+    const nombre = document.getElementById("nueva-empresa").value.trim();
+    if (!nombre) { toast("Escribe el nombre de la empresa", false); return; }
+
+    const r = await fetch("/admin/agregar_empresa", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ empresa })
+      body: JSON.stringify({ empresa: nombre })
     });
     const d = await r.json();
-    if (!d.ok) { notif("Error: " + (d.error || "desconocido")); return; }
-    lastUrl = d.url;
-    document.getElementById("tok-nuevo").textContent = d.token;
-    document.getElementById("url-nuevo").textContent = d.url;
-    document.getElementById("add-result").style.display = "block";
-    document.getElementById("nueva-empresa").value = "";
-    // Agregar fila a la tabla
-    const tbody = document.getElementById("tbody-empresas");
-    const emptyRow = tbody.querySelector(".empty-row");
-    if (emptyRow) emptyRow.remove();
-    const tr = document.createElement("tr");
-    tr.id = "row-" + d.token;
-    tr.innerHTML = `
-      <td class="td-empresa">${escHtml(d.empresa)}</td>
-      <td class="td-token">${escHtml(d.token)}</td>
-      <td class="td-fecha">${new Date().toISOString().slice(0,16).replace("T"," ")}</td>
-      <td class="td-actions">
-        <button class="btn-sm copy" onclick="copiarToken('${d.token}')">Copiar URL</button>
-        <button class="btn-sm desact" onclick="toggleEmpresa('${d.token}', false)">Desactivar</button>
-        <button class="btn-sm del" onclick="eliminarEmpresa('${d.token}', '${escHtml(d.empresa)}')">Eliminar</button>
-      </td>`;
-    tbody.appendChild(tr);
-    notif("✓ Empresa creada: " + d.empresa);
-  }
-
-  function copiarUrl() {
-    navigator.clipboard.writeText(lastUrl).then(() => notif("✓ URL copiada")).catch(() => {
-      const el = document.getElementById("url-nuevo");
-      const range = document.createRange();
-      range.selectNode(el);
-      window.getSelection().removeAllRanges();
-      window.getSelection().addRange(range);
-    });
-  }
-
-  function copiarToken(token) {
-    const url = BASE + "/?token=" + token;
-    navigator.clipboard.writeText(url).then(() => notif("✓ URL copiada")).catch(() => notif("URL: " + url));
+    if (d.ok) {
+      toast(`✓ ${d.empresa} creada — Token: ${d.token}`);
+      document.getElementById("nueva-empresa").value = "";
+      setTimeout(() => location.reload(), 1500);
+    } else {
+      toast(d.error || "Error al crear", false);
+    }
   }
 
   async function toggleEmpresa(token, activo) {
-    const r = await fetch("/admin/toggle_empresa?admin_token=" + getCookie("pdfocus_admin"), {
+    const r = await fetch("/admin/toggle_empresa", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ token, activo })
     });
     const d = await r.json();
-    notif(d.ok ? (activo ? "✓ Empresa activada" : "✓ Empresa desactivada") : "Error al cambiar estado");
+    if (d.ok) {
+      toast(activo ? "Empresa activada" : "Empresa desactivada");
+      setTimeout(() => location.reload(), 1000);
+    } else {
+      toast("Error al cambiar estado", false);
+    }
   }
 
-  async function eliminarEmpresa(token, empresa) {
-    if (!confirm(`¿Eliminar empresa "${empresa}"? Esta acción no se puede deshacer.`)) return;
-    const r = await fetch("/admin/eliminar_empresa?admin_token=" + getCookie("pdfocus_admin"), {
+  async function eliminarEmpresa(token, nombre) {
+    if (!confirm(`¿Eliminar empresa "${nombre}"? Esta acción no se puede deshacer.`)) return;
+    const r = await fetch("/admin/eliminar_empresa", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ token })
     });
     const d = await r.json();
     if (d.ok) {
-      const row = document.getElementById("row-" + token);
+      toast("Empresa eliminada");
+      const row = document.getElementById(`row-${token}`);
       if (row) row.remove();
-      notif("✓ Empresa eliminada");
     } else {
-      notif("Error al eliminar");
+      toast("Error al eliminar", false);
     }
   }
 
   async function rebuildIndex() {
-    if (!confirm("¿Reconstruir el índice completo? Puede tardar varios minutos.")) return;
-    const r = await fetch("/admin/rebuild_index?admin_token=" + getCookie("pdfocus_admin"), { method: "POST" });
+    if (!confirm("¿Reconstruir el índice completo? Tardará ~20 minutos.")) return;
+    const r = await fetch("/admin/rebuild_index", { method: "POST" });
     const d = await r.json();
-    notif(d.ok ? "⟳ Reconstrucción iniciada" : "Error: " + d.error);
+    toast(d.ok ? "Reconstrucción iniciada ✓" : "Error", d.ok);
   }
 
-  function getCookie(name) {
-    const match = document.cookie.match(new RegExp("(^| )" + name + "=([^;]+)"));
-    return match ? match[2] : "";
+  // Modal contraseña
+  function openPasswordModal(token, empresa) {
+    document.getElementById("pw-token").value = token;
+    document.getElementById("pw-modal-subtitle").textContent =
+      `Define la clave de acceso para ${empresa}.`;
+    document.getElementById("pw-input").value = "";
+    document.getElementById("pw-modal").classList.add("open");
+    setTimeout(() => document.getElementById("pw-input").focus(), 100);
   }
 
-  function escHtml(s) {
-    return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+  function closePasswordModal() {
+    document.getElementById("pw-modal").classList.remove("open");
   }
+
+  async function savePassword() {
+    const token    = document.getElementById("pw-token").value;
+    const password = document.getElementById("pw-input").value.trim();
+    if (password.length < 4) {
+      toast("La contraseña debe tener al menos 4 caracteres", false);
+      return;
+    }
+    const r = await fetch("/admin/set_password", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token, password })
+    });
+    const d = await r.json();
+    if (d.ok) {
+      toast("Contraseña guardada ✓");
+      closePasswordModal();
+      setTimeout(() => location.reload(), 1000);
+    } else {
+      toast(d.error || "Error al guardar", false);
+    }
+  }
+
+  // Cerrar modal al hacer clic fuera
+  document.getElementById("pw-modal").addEventListener("click", function(e) {
+    if (e.target === this) closePasswordModal();
+  });
+
+  // Enter en campo empresa
+  document.getElementById("nueva-empresa").addEventListener("keypress", function(e) {
+    if (e.key === "Enter") agregarEmpresa();
+  });
 </script>
 
 </body>
