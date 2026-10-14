@@ -102,6 +102,11 @@ def _find_drive_cache_file_id(svc):
 
 
 def _save_index_to_drive():
+    folder_id = (FOLDER_ID_MANIFIESTOS or FOLDER_ID_FACTURAS or "").strip()
+    print(f"[DRIVE-CACHE] folder_id={repr(folder_id)}", flush=True)
+    if not folder_id:
+        print("[DRIVE-CACHE] Sin folder_id — no se puede guardar en Drive (service account no tiene cuota propia).", flush=True)
+        return
     try:
         with _INDEX_LOCK:
             data = dict(_INDEX_CACHE)
@@ -111,11 +116,6 @@ def _save_index_to_drive():
         json_bytes = json.dumps(data, ensure_ascii=False).encode("utf-8")
         buffer = io.BytesIO(json_bytes)
         svc = _get_drive_service()
-
-        # IMPORTANTE: resumable=True es obligatorio para archivos grandes.
-        # Con resumable=False y archivos > 5MB, Drive hace un "simple upload"
-        # que ignora la metadata "parents" y guarda en el root del service
-        # account (que no tiene cuota → 403 storageQuotaExceeded).
         media = MediaIoBaseUpload(buffer, mimetype="application/json", resumable=True)
 
         existing_id = _find_drive_cache_file_id(svc)
@@ -126,22 +126,18 @@ def _save_index_to_drive():
             ).execute()
             print(f"[DRIVE-CACHE] Caché actualizado en Drive: {total} PDFs.", flush=True)
         else:
-            # Guardar dentro de la carpeta compartida (service accounts no tienen
-            # almacenamiento propio — solo pueden crear archivos en carpetas que les
-            # fueron compartidas con permiso de escritura)
-            folder_id = FOLDER_ID_MANIFIESTOS or FOLDER_ID_FACTURAS
             file_metadata = {
                 "name": DRIVE_CACHE_FILENAME,
                 "mimeType": "application/json",
+                "parents": [folder_id],
             }
-            if folder_id:
-                file_metadata["parents"] = [folder_id]
+            print(f"[DRIVE-CACHE] Creando caché en carpeta {folder_id}...", flush=True)
             svc.files().create(
                 body=file_metadata,
                 media_body=media,
                 fields="id",
             ).execute()
-            print(f"[DRIVE-CACHE] Caché creado en Drive (carpeta compartida): {total} PDFs.", flush=True)
+            print(f"[DRIVE-CACHE] ✅ Caché creado en Drive: {total} PDFs.", flush=True)
     except Exception as e:
         print(f"[DRIVE-CACHE] Error guardando caché en Drive: {e}", flush=True)
 
