@@ -461,6 +461,16 @@ def _validate_token(token):
             _USERS_LOADING.wait(timeout=5)
         with _USERS_LOCK:
             users = dict(_USERS_CACHE)
+    # Fallback síncrono si sigue vacío
+    if not users:
+        try:
+            users = _load_users_from_sheets()
+            with _USERS_LOCK:
+                _USERS_CACHE.clear()
+                _USERS_CACHE.update(users)
+                _USERS_LOADED["ts"] = time.time()
+        except Exception as e:
+            print(f"[TOKEN] Error cargando usuarios directo: {e}", flush=True)
     user = users.get(token)
     if user and user.get("activo"):
         return user
@@ -1091,11 +1101,21 @@ def _check_admin():
 def admin_panel():
     if not _check_admin():
         return render_template("admin_login.html")
-    # Esperar máx 3s si hay carga en progreso
+    # Esperar máx 5s si hay carga en progreso
     if _USERS_LOADING.is_set():
-        _USERS_LOADING.wait(timeout=3)
+        _USERS_LOADING.wait(timeout=5)
     with _USERS_LOCK:
         users = dict(_USERS_CACHE)
+    # Si el caché sigue vacío, cargar directamente (fallback síncrono)
+    if not users:
+        try:
+            users = _load_users_from_sheets()
+            with _USERS_LOCK:
+                _USERS_CACHE.clear()
+                _USERS_CACHE.update(users)
+                _USERS_LOADED["ts"] = time.time()
+        except Exception as e:
+            print(f"[ADMIN] Error cargando usuarios directo: {e}", flush=True)
     with _INDEX_LOCK:
         index_info = {
             sec: {
