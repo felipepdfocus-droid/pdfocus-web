@@ -111,10 +111,19 @@ def _save_index_to_drive():
         json_bytes = json.dumps(data, ensure_ascii=False).encode("utf-8")
         buffer = io.BytesIO(json_bytes)
         svc = _get_drive_service()
-        media = MediaIoBaseUpload(buffer, mimetype="application/json", resumable=False)
+
+        # IMPORTANTE: resumable=True es obligatorio para archivos grandes.
+        # Con resumable=False y archivos > 5MB, Drive hace un "simple upload"
+        # que ignora la metadata "parents" y guarda en el root del service
+        # account (que no tiene cuota → 403 storageQuotaExceeded).
+        media = MediaIoBaseUpload(buffer, mimetype="application/json", resumable=True)
+
         existing_id = _find_drive_cache_file_id(svc)
         if existing_id:
-            svc.files().update(fileId=existing_id, media_body=media).execute()
+            svc.files().update(
+                fileId=existing_id,
+                media_body=media,
+            ).execute()
             print(f"[DRIVE-CACHE] Caché actualizado en Drive: {total} PDFs.", flush=True)
         else:
             # Guardar dentro de la carpeta compartida (service accounts no tienen
@@ -127,7 +136,11 @@ def _save_index_to_drive():
             }
             if folder_id:
                 file_metadata["parents"] = [folder_id]
-            svc.files().create(body=file_metadata, media_body=media, fields="id").execute()
+            svc.files().create(
+                body=file_metadata,
+                media_body=media,
+                fields="id",
+            ).execute()
             print(f"[DRIVE-CACHE] Caché creado en Drive (carpeta compartida): {total} PDFs.", flush=True)
     except Exception as e:
         print(f"[DRIVE-CACHE] Error guardando caché en Drive: {e}", flush=True)
