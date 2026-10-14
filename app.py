@@ -455,6 +455,12 @@ def _validate_token(token):
     if not token:
         return None
     users = _get_users()
+    # Si caché vacío, esperar máx 5s a que el background loader termine
+    if not users:
+        if _USERS_LOADING.is_set():
+            _USERS_LOADING.wait(timeout=5)
+        with _USERS_LOCK:
+            users = dict(_USERS_CACHE)
     user = users.get(token)
     if user and user.get("activo"):
         return user
@@ -1069,22 +1075,11 @@ def _check_admin():
 def admin_panel():
     if not _check_admin():
         return render_template("admin_login.html")
-    # Si hay una carga en progreso, esperar hasta 8s
+    # Esperar máx 3s si hay carga en progreso
     if _USERS_LOADING.is_set():
-        _USERS_LOADING.wait(timeout=8)
+        _USERS_LOADING.wait(timeout=3)
     with _USERS_LOCK:
         users = dict(_USERS_CACHE)
-    # Si aún vacío, cargar directo (bloquea máx 8s)
-    if not users:
-        try:
-            users = _load_users_from_sheets()
-            with _USERS_LOCK:
-                _USERS_CACHE.clear()
-                _USERS_CACHE.update(users)
-                _USERS_LOADED["ts"] = time.time()
-        except Exception as e:
-            print(f"[ADMIN] Error cargando usuarios: {e}", flush=True)
-            users = {}
     with _INDEX_LOCK:
         index_info = {
             sec: {
