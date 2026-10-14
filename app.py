@@ -19,6 +19,8 @@ import secrets
 import string
 from datetime import datetime
 
+import gzip
+import base64
 import pymupdf as fitz
 from flask import (
     Flask, request, jsonify, send_file,
@@ -39,8 +41,13 @@ SERVICE_ACCOUNT_JSON  = os.environ.get("GOOGLE_SERVICE_ACCOUNT", "")
 ADMIN_TOKEN           = os.environ.get("ADMIN_TOKEN", "pdfocus_kino_2026")
 SHEETS_ID             = os.environ.get("SHEETS_ID", "1a-lIDPDbimXLVys0vS6keqls-fz4bCU1pq28qiZ2qJY")
 
-# Nombre del archivo de caché en Google Drive
+# Nombre del archivo de caché en Google Drive (se mantiene como fallback)
 DRIVE_CACHE_FILENAME  = "pdfocus_index_cache.json"
+
+# Hoja de Sheets para el caché del índice
+CACHE_SHEET_NAME = "pdfocus_cache"
+# Tamaño máximo de cada chunk en Sheets (50.000 chars por celda, usamos 45.000 para seguridad)
+CACHE_CHUNK_SIZE = 45000
 
 # Ruta temporal para el caché local
 INDEX_CACHE_PATH = "/tmp/pdfocus_index_cache.json"
@@ -79,85 +86,86 @@ def _get_sheets_service():
     return build("sheets", "v4", credentials=creds)
 
 
-# ── CACHÉ EN GOOGLE DRIVE ─────────────────────────────────────
-def _find_drive_cache_file_id(svc):
-    # Busca el archivo de caché dentro de la carpeta de manifiestos (service accounts
-    # no tienen almacenamiento propio, deben guardar en carpetas compartidas con ellos)
-    folder_id = FOLDER_ID_MANIFIESTOS or FOLDER_ID_FACTURAS
+# ── CACHÉ EN GOOGLE SHEETS ────────────────────────────────────
+# Usamos Sheets en vez de Drive porque los service accounts no tienen
+# cuota de almacenamiento propia en Drive.
+# El índice se comprime (gzip) y codifica en base64, luego se divide
+# en chunks de 45.000 chars y se guarda una fila por chunk.
+# Hoja: CACHE_SHEET_NAME, columna A = número de chunk, columna B = datos.
+
+def _ensure_cache_sheet(svc):
+    """Crea la hoja pdfocus_cache si no existe."""
     try:
-        if folder_id:
-            q = f"name='{DRIVE_CACHE_FILENAME}' and '{folder_id}' in parents and trashed=false"
-        else:
-            q = f"name='{DRIVE_CACHE_FILENAME}' and trashed=false"
-        result = svc.files().list(
-            q=q,
-            fields="files(id, name, modifiedTime)",
-            pageSize=5,
-        ).execute()
-        files = result.get("files", [])
-        return files[0]["id"] if files else None
+        meta = svc.spreadsheets().get(spreadsheetId=SHEETS_ID).execute()
+        names = [s["properties"]["title"] for s in meta.get("sheets", [])]
+        if CACHE_SHEET_NAME not in names:
+            svc.spreadsheets().batchUpdate(
+                spreadsheetId=SHEETS_ID,
+                body={"requests": [{"addSheet": {"properties": {"title": CACHE_SHEET_NAME}}}]}
+            ).execute()
+            print(f"[SHEETS-CACHE] Hoja '{CACHE_SHEET_NAME}' creada.", flush=True)
+        return True
     except Exception as e:
-        print(f"[DRIVE-CACHE] Error buscando caché en Drive: {e}", flush=True)
-        return None
+        print(f"[SHEETS-CACHE] Error verificando hoja: {e}", flush=True)
+        return False
 
 
 def _save_index_to_drive():
-    folder_id = (FOLDER_ID_MANIFIESTOS or FOLDER_ID_FACTURAS or "").strip()
-    print(f"[DRIVE-CACHE] folder_id={repr(folder_id)}", flush=True)
-    if not folder_id:
-        print("[DRIVE-CACHE] Sin folder_id — no se puede guardar en Drive (service account no tiene cuota propia).", flush=True)
-        return
+    """Guarda el índice comprimido en Google Sheets (chunks de base64)."""
     try:
         with _INDEX_LOCK:
             data = dict(_INDEX_CACHE)
         total = sum(len(v) for v in data.values())
         if total == 0:
             return
+        # Comprimir con gzip y codificar en base64
         json_bytes = json.dumps(data, ensure_ascii=False).encode("utf-8")
-        buffer = io.BytesIO(json_bytes)
-        svc = _get_drive_service()
-        media = MediaIoBaseUpload(buffer, mimetype="application/json", resumable=True)
+        compressed = gzip.compress(json_bytes, compresslevel=9)
+        b64 = base64.b64encode(compressed).decode("ascii")
+        # Dividir en chunks
+        chunks = [b64[i:i+CACHE_CHUNK_SIZE] for i in range(0, len(b64), CACHE_CHUNK_SIZE)]
+        print(f"[SHEETS-CACHE] Guardando {total} PDFs en {len(chunks)} chunks ({len(b64)} chars)...", flush=True)
 
-        existing_id = _find_drive_cache_file_id(svc)
-        if existing_id:
-            svc.files().update(
-                fileId=existing_id,
-                media_body=media,
-            ).execute()
-            print(f"[DRIVE-CACHE] Caché actualizado en Drive: {total} PDFs.", flush=True)
-        else:
-            file_metadata = {
-                "name": DRIVE_CACHE_FILENAME,
-                "mimeType": "application/json",
-                "parents": [folder_id],
-            }
-            print(f"[DRIVE-CACHE] Creando caché en carpeta {folder_id}...", flush=True)
-            svc.files().create(
-                body=file_metadata,
-                media_body=media,
-                fields="id",
-            ).execute()
-            print(f"[DRIVE-CACHE] ✅ Caché creado en Drive: {total} PDFs.", flush=True)
+        svc = _get_sheets_service()
+        _ensure_cache_sheet(svc)
+
+        # Limpiar hoja y escribir chunks
+        svc.spreadsheets().values().clear(
+            spreadsheetId=SHEETS_ID,
+            range=f"{CACHE_SHEET_NAME}!A:B",
+        ).execute()
+        rows = [[str(i), chunk] for i, chunk in enumerate(chunks)]
+        svc.spreadsheets().values().update(
+            spreadsheetId=SHEETS_ID,
+            range=f"{CACHE_SHEET_NAME}!A1",
+            valueInputOption="RAW",
+            body={"values": rows},
+        ).execute()
+        print(f"[SHEETS-CACHE] ✅ Caché guardado en Sheets: {total} PDFs, {len(chunks)} chunks.", flush=True)
     except Exception as e:
-        print(f"[DRIVE-CACHE] Error guardando caché en Drive: {e}", flush=True)
+        print(f"[SHEETS-CACHE] Error guardando caché: {e}", flush=True)
 
 
 def _load_index_from_drive():
+    """Carga el índice comprimido desde Google Sheets."""
     try:
-        svc = _get_drive_service()
-        file_id = _find_drive_cache_file_id(svc)
-        if not file_id:
-            print("[DRIVE-CACHE] No hay caché en Drive.", flush=True)
+        svc = _get_sheets_service()
+        result = svc.spreadsheets().values().get(
+            spreadsheetId=SHEETS_ID,
+            range=f"{CACHE_SHEET_NAME}!A:B",
+        ).execute()
+        rows = result.get("values", [])
+        if not rows:
+            print("[SHEETS-CACHE] No hay caché en Sheets.", flush=True)
             return False
-        print(f"[DRIVE-CACHE] Descargando caché desde Drive...", flush=True)
-        req = svc.files().get_media(fileId=file_id)
-        buf = io.BytesIO()
-        dl = MediaIoBaseDownload(buf, req)
-        done = False
-        while not done:
-            _, done = dl.next_chunk()
-        buf.seek(0)
-        data = json.loads(buf.read().decode("utf-8"))
+        # Ordenar por número de chunk y concatenar
+        rows.sort(key=lambda r: int(r[0]) if r and r[0].isdigit() else 0)
+        b64 = "".join(r[1] for r in rows if len(r) > 1)
+        if not b64:
+            return False
+        compressed = base64.b64decode(b64)
+        json_bytes = gzip.decompress(compressed)
+        data = json.loads(json_bytes.decode("utf-8"))
         if not data:
             return False
         with _INDEX_LOCK:
@@ -167,7 +175,7 @@ def _load_index_from_drive():
                 if sec_key in data and len(data[sec_key]) > 0:
                     _INDEX_BUILT[sec_key] = True
         total = sum(len(v) for v in data.values())
-        print(f"[DRIVE-CACHE] ✅ Índice cargado desde Drive: {total} PDFs.", flush=True)
+        print(f"[SHEETS-CACHE] ✅ Índice cargado desde Sheets: {total} PDFs.", flush=True)
         try:
             with open(INDEX_CACHE_PATH, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False)
@@ -175,7 +183,7 @@ def _load_index_from_drive():
             pass
         return True
     except Exception as e:
-        print(f"[DRIVE-CACHE] Error descargando caché: {e}", flush=True)
+        print(f"[SHEETS-CACHE] Error cargando caché: {e}", flush=True)
         return False
 
 
@@ -1087,13 +1095,14 @@ def admin_rebuild_index():
 
     def _delete_drive_cache_and_rebuild():
         try:
-            svc = _get_drive_service()
-            file_id = _find_drive_cache_file_id(svc)
-            if file_id:
-                svc.files().delete(fileId=file_id).execute()
-                print("[DRIVE-CACHE] Caché en Drive eliminado.", flush=True)
+            svc = _get_sheets_service()
+            svc.spreadsheets().values().clear(
+                spreadsheetId=SHEETS_ID,
+                range=f"{CACHE_SHEET_NAME}!A:B",
+            ).execute()
+            print("[SHEETS-CACHE] Caché en Sheets eliminado.", flush=True)
         except Exception as e:
-            print(f"[DRIVE-CACHE] Error eliminando caché: {e}", flush=True)
+            print(f"[SHEETS-CACHE] Error eliminando caché: {e}", flush=True)
         _rebuild_all()
 
     threading.Thread(target=_delete_drive_cache_and_rebuild, daemon=True).start()
