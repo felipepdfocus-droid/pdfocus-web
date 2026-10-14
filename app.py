@@ -1069,11 +1069,22 @@ def _check_admin():
 def admin_panel():
     if not _check_admin():
         return render_template("admin_login.html")
-    # Obtener usuarios — si el caché está vacío espera hasta 5s (primera carga)
-    users = _get_users(force_reload=False)
-    # Si aún vacío tras espera, forzar recarga síncrona con timeout corto
+    # Si hay una carga en progreso, esperar hasta 8s
+    if _USERS_LOADING.is_set():
+        _USERS_LOADING.wait(timeout=8)
+    with _USERS_LOCK:
+        users = dict(_USERS_CACHE)
+    # Si aún vacío, cargar directo (bloquea máx 8s)
     if not users:
-        users = _get_users(force_reload=True)
+        try:
+            users = _load_users_from_sheets()
+            with _USERS_LOCK:
+                _USERS_CACHE.clear()
+                _USERS_CACHE.update(users)
+                _USERS_LOADED["ts"] = time.time()
+        except Exception as e:
+            print(f"[ADMIN] Error cargando usuarios: {e}", flush=True)
+            users = {}
     with _INDEX_LOCK:
         index_info = {
             sec: {
