@@ -1040,9 +1040,12 @@ def _check_admin():
 def admin_panel():
     if not _check_admin():
         return render_template("admin_login.html")
-    users = _get_users(force_reload=False)
-    # Recargar usuarios en background sin bloquear el request
-    threading.Thread(target=lambda: _get_users(force_reload=True), daemon=True).start()
+    # Usar solo caché en memoria — nunca bloquear el worker llamando a Sheets
+    with _USERS_LOCK:
+        users = dict(_USERS_CACHE)
+    # Si el caché está vacío, cargar en background para la próxima vez
+    if not users:
+        threading.Thread(target=lambda: _get_users(force_reload=True), daemon=True).start()
     with _INDEX_LOCK:
         index_info = {
             sec: {
@@ -1233,6 +1236,8 @@ def _start_index_background():
 
 
 _start_index_background()
+# Precargar usuarios en background al arrancar
+threading.Thread(target=lambda: _get_users(force_reload=True), daemon=True).start()
 
 if __name__ == "__main__":
     app.run(debug=False, host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
