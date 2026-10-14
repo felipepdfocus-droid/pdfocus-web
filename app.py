@@ -318,8 +318,14 @@ def _get_users(force_reload=False):
         current = dict(_USERS_CACHE)
         cache_empty = not current
 
-    if needs_reload and not _USERS_LOADING.is_set():
-        # Cargar en background para no bloquear el worker HTTP
+    # Si el caché está vacío y hay una carga en progreso (startup), esperar hasta 8s
+    if cache_empty and _USERS_LOADING.is_set():
+        _USERS_LOADING.wait(timeout=8)
+        with _USERS_LOCK:
+            current = dict(_USERS_CACHE)
+
+    if needs_reload and not _USERS_LOADING.is_set() and not cache_empty:
+        # Recarga periódica en background (caché ya tiene datos)
         def _do_reload():
             if _USERS_LOADING.is_set():
                 return
@@ -328,13 +334,7 @@ def _get_users(force_reload=False):
                 _reload_users_sync()
             finally:
                 _USERS_LOADING.clear()
-        t = threading.Thread(target=_do_reload, daemon=True)
-        t.start()
-        # Si el caché está completamente vacío, esperar máximo 5s para la primera carga
-        if cache_empty:
-            t.join(timeout=5)
-            with _USERS_LOCK:
-                current = dict(_USERS_CACHE)
+        threading.Thread(target=_do_reload, daemon=True).start()
 
     return current
 
@@ -731,11 +731,20 @@ def update_index_incremental(folder_id, section_key):
             }
             print(f"  ✔ Actualizado: {f['name']}", flush=True)
             nuevos += 1
+            # Guardar progreso en Sheets cada 50 PDFs nuevos
+            if nuevos % 50 == 0:
+                with _INDEX_LOCK:
+                    _INDEX_CACHE[section_key] = dict(current)
+                    _INDEX_BUILT[section_key] = True
+                print(f"[UPDATE] Guardando progreso parcial: {nuevos} nuevos...", flush=True)
+                _save_index_to_disk()
+                _save_index_to_drive()
         except Exception as e:
             print(f"  ✖ Error actualizando {f['name']}: {e}", flush=True)
 
     with _INDEX_LOCK:
         _INDEX_CACHE[section_key] = current
+        _INDEX_BUILT[section_key] = True
 
     if nuevos > 0 or removed:
         _save_index_to_disk()
@@ -1254,7 +1263,9 @@ def _start_index_background():
 
         # 2. Caché en Sheets (sobrevive deploys)
         if _load_index_from_drive():
-            print("[STARTUP] ✅ Índice desde Sheets.", flush=True)
+            total = sum(len(v) for v in _INDEX_CACHE.values())
+            print(f"[STARTUP] ✅ Índice desde Sheets ({total} PDFs).", flush=True)
+            # Siempre correr update incremental — completa PDFs faltantes y actualiza modificados
             threading.Thread(target=_run_update, daemon=True).start()
             return
 
@@ -1278,7 +1289,15 @@ def _start_index_background():
 
 _start_index_background()
 # Precargar usuarios en background al arrancar
-threading.Thread(target=lambda: _get_users(force_reload=True), daemon=True).start()
+# Marcamos el Event ANTES de lanzar el thread para que admin_panel y _validate_token
+# puedan esperar correctamente desde el primer instante.
+_USERS_LOADING.set()
+def _initial_users_load():
+    try:
+        _reload_users_sync()
+    finally:
+        _USERS_LOADING.clear()
+threading.Thread(target=_initial_users_load, daemon=True).start()
 
 if __name__ == "__main__":
     app.run(debug=False, host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
