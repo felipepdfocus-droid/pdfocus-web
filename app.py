@@ -671,7 +671,7 @@ def build_index(folder_id, section_key):
     pdfs = list_pdfs_in_folder(folder_id, include_modified_time=True)
     print(f"[INDEX] {section_key}: {len(pdfs)} PDFs encontrados.", flush=True)
     new_entries = {}
-    for f in pdfs:
+    for i, f in enumerate(pdfs):
         try:
             data = download_pdf_bytes(f["id"])
             compact = build_compact_from_bytes(data)
@@ -683,6 +683,13 @@ def build_index(folder_id, section_key):
             print(f"  ✔ Indexado: {f['name']}", flush=True)
         except Exception as e:
             print(f"  ✖ Error indexando {f['name']}: {e}", flush=True)
+        # Guardar progreso parcial en Sheets cada 50 PDFs
+        if (i + 1) % 50 == 0:
+            with _INDEX_LOCK:
+                _INDEX_CACHE[section_key] = dict(new_entries)
+            print(f"[INDEX] Guardando progreso parcial: {i+1}/{len(pdfs)}...", flush=True)
+            _save_index_to_disk()
+            _save_index_to_drive()
     with _INDEX_LOCK:
         _INDEX_CACHE[section_key] = new_entries
         _INDEX_BUILT[section_key] = True
