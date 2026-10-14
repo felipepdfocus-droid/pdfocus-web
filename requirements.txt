@@ -1,5 +1,7 @@
 flask
 gunicorn
+gevent
 pymupdf
 google-api-python-client
 google-auth
+werkzeug
