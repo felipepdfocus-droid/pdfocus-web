@@ -992,7 +992,9 @@ def _check_admin():
 def admin_panel():
     if not _check_admin():
         return render_template("admin_login.html")
-    users = _get_users(force_reload=True)
+    users = _get_users(force_reload=False)
+    # Recargar usuarios en background sin bloquear el request
+    threading.Thread(target=lambda: _get_users(force_reload=True), daemon=True).start()
     with _INDEX_LOCK:
         index_info = {
             sec: {
