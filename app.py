@@ -52,10 +52,19 @@ CACHE_CHUNK_SIZE = 45000
 # Ruta temporal para el caché local
 INDEX_CACHE_PATH = "/tmp/pdfocus_index_cache.json"
 
-# Cache en memoria
+# Cache en memoria — el campo "compact" se guarda comprimido (gzip bytes)
+# para reducir uso de RAM ~75%. Se descomprime solo al buscar.
 _INDEX_CACHE = {}
 _INDEX_LOCK  = threading.Lock()
 _INDEX_BUILT = {"manifiestos": False, "facturas": False}
+
+
+def _compress_compact(text: str) -> bytes:
+    return gzip.compress(text.encode("utf-8"), compresslevel=1)
+
+
+def _decompress_compact(data: bytes) -> str:
+    return gzip.decompress(data).decode("utf-8")
 
 # Cache de usuarios
 _USERS_CACHE  = {}
@@ -118,8 +127,17 @@ def _save_index_to_drive():
         total = sum(len(v) for v in data.values())
         if total == 0:
             return
+        # Descomprimir compact (bytes) a string antes de serializar a JSON
+        serializable = {}
+        for sec_key, entries in data.items():
+            serializable[sec_key] = {}
+            for fid, info in entries.items():
+                entry = dict(info)
+                if isinstance(entry.get("compact"), bytes):
+                    entry["compact"] = _decompress_compact(entry["compact"])
+                serializable[sec_key][fid] = entry
         # Comprimir con gzip y codificar en base64
-        json_bytes = json.dumps(data, ensure_ascii=False).encode("utf-8")
+        json_bytes = json.dumps(serializable, ensure_ascii=False).encode("utf-8")
         compressed = gzip.compress(json_bytes, compresslevel=9)
         b64 = base64.b64encode(compressed).decode("ascii")
         # Dividir en chunks
@@ -168,6 +186,11 @@ def _load_index_from_drive():
         data = json.loads(json_bytes.decode("utf-8"))
         if not data:
             return False
+        # Comprimir compact en memoria para ahorrar RAM
+        for sec_key, entries in data.items():
+            for fid, info in entries.items():
+                if isinstance(info.get("compact"), str):
+                    info["compact"] = _compress_compact(info["compact"])
         with _INDEX_LOCK:
             _INDEX_CACHE.clear()
             _INDEX_CACHE.update(data)
@@ -177,8 +200,16 @@ def _load_index_from_drive():
         total = sum(len(v) for v in data.values())
         print(f"[SHEETS-CACHE] ✅ Índice cargado desde Sheets: {total} PDFs.", flush=True)
         try:
+            # Guardar en disco con compact como string (para compatibilidad)
+            disk_data = {}
+            for sec_key, entries in data.items():
+                disk_data[sec_key] = {}
+                for fid, info in entries.items():
+                    disk_data[sec_key][fid] = dict(info)
+                    if isinstance(info.get("compact"), bytes):
+                        disk_data[sec_key][fid]["compact"] = _decompress_compact(info["compact"])
             with open(INDEX_CACHE_PATH, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False)
+                json.dump(disk_data, f, ensure_ascii=False)
         except Exception:
             pass
         return True
@@ -191,8 +222,17 @@ def _save_index_to_disk():
     try:
         with _INDEX_LOCK:
             data = dict(_INDEX_CACHE)
+        # Descomprimir compact (bytes) a string antes de serializar
+        serializable = {}
+        for sec_key, entries in data.items():
+            serializable[sec_key] = {}
+            for fid, info in entries.items():
+                entry = dict(info)
+                if isinstance(entry.get("compact"), bytes):
+                    entry["compact"] = _decompress_compact(entry["compact"])
+                serializable[sec_key][fid] = entry
         with open(INDEX_CACHE_PATH, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False)
+            json.dump(serializable, f, ensure_ascii=False)
         total = sum(len(v) for v in data.values())
         print(f"[CACHE-LOCAL] Copia local guardada: {total} PDFs.", flush=True)
     except Exception as e:
@@ -207,6 +247,11 @@ def _load_index_from_disk():
             data = json.load(f)
         if not data:
             return False
+        # Comprimir compact en memoria para ahorrar RAM
+        for sec_key, entries in data.items():
+            for fid, info in entries.items():
+                if isinstance(info.get("compact"), str):
+                    info["compact"] = _compress_compact(info["compact"])
         with _INDEX_LOCK:
             _INDEX_CACHE.clear()
             _INDEX_CACHE.update(data)
@@ -597,7 +642,7 @@ def build_index(folder_id, section_key):
             compact = build_compact_from_bytes(data)
             new_entries[f["id"]] = {
                 "name": f["name"],
-                "compact": compact,
+                "compact": _compress_compact(compact),
                 "modified_time": f.get("modifiedTime", ""),
             }
             print(f"  ✔ Indexado: {f['name']}", flush=True)
@@ -639,7 +684,7 @@ def update_index_incremental(folder_id, section_key):
             compact = build_compact_from_bytes(data)
             current[fid] = {
                 "name": f["name"],
-                "compact": compact,
+                "compact": _compress_compact(compact),
                 "modified_time": mod,
             }
             print(f"  ✔ Actualizado: {f['name']}", flush=True)
@@ -939,7 +984,10 @@ def buscar(empresa=None, token=None):
         ensure_index(sec_key, folder_id)
         index_data = _INDEX_CACHE.get(sec_key, {})
         for file_id, info in index_data.items():
-            if ref_in_text_safe(ref_norm, info["compact"]):
+            compact = info["compact"]
+            if isinstance(compact, bytes):
+                compact = _decompress_compact(compact)
+            if ref_in_text_safe(ref_norm, compact):
                 resultados.append({
                     "nombre":   info["name"],
                     "tipo":     mode,
