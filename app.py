@@ -1144,26 +1144,24 @@ def _start_index_background():
             print("[STARTUP] ERROR: GOOGLE_SERVICE_ACCOUNT está vacío.", flush=True)
             return
 
+        def _run_update():
+            if FOLDER_ID_MANIFIESTOS:
+                try: update_index_incremental(FOLDER_ID_MANIFIESTOS, "manifiestos")
+                except Exception as e: print(f"[STARTUP] {e}", flush=True)
+            if FOLDER_ID_FACTURAS:
+                try: update_index_incremental(FOLDER_ID_FACTURAS, "facturas")
+                except Exception as e: print(f"[STARTUP] {e}", flush=True)
+
         # 1. Caché local /tmp (reinicios rápidos)
         if _load_index_from_disk():
             print("[STARTUP] ✅ Índice desde /tmp.", flush=True)
-            if FOLDER_ID_MANIFIESTOS:
-                try: update_index_incremental(FOLDER_ID_MANIFIESTOS, "manifiestos")
-                except Exception as e: print(f"[STARTUP] {e}", flush=True)
-            if FOLDER_ID_FACTURAS:
-                try: update_index_incremental(FOLDER_ID_FACTURAS, "facturas")
-                except Exception as e: print(f"[STARTUP] {e}", flush=True)
+            threading.Thread(target=_run_update, daemon=True).start()
             return
 
-        # 2. Caché en Drive (sobrevive deploys)
+        # 2. Caché en Sheets (sobrevive deploys)
         if _load_index_from_drive():
-            print("[STARTUP] ✅ Índice desde Drive.", flush=True)
-            if FOLDER_ID_MANIFIESTOS:
-                try: update_index_incremental(FOLDER_ID_MANIFIESTOS, "manifiestos")
-                except Exception as e: print(f"[STARTUP] {e}", flush=True)
-            if FOLDER_ID_FACTURAS:
-                try: update_index_incremental(FOLDER_ID_FACTURAS, "facturas")
-                except Exception as e: print(f"[STARTUP] {e}", flush=True)
+            print("[STARTUP] ✅ Índice desde Sheets.", flush=True)
+            threading.Thread(target=_run_update, daemon=True).start()
             return
 
         # 3. Construir desde cero
