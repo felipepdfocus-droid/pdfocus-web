@@ -1069,12 +1069,11 @@ def _check_admin():
 def admin_panel():
     if not _check_admin():
         return render_template("admin_login.html")
-    # Usar solo caché en memoria — nunca bloquear el worker llamando a Sheets
-    with _USERS_LOCK:
-        users = dict(_USERS_CACHE)
-    # Si el caché está vacío, cargar en background para la próxima vez
+    # Obtener usuarios — si el caché está vacío espera hasta 5s (primera carga)
+    users = _get_users(force_reload=False)
+    # Si aún vacío tras espera, forzar recarga síncrona con timeout corto
     if not users:
-        threading.Thread(target=lambda: _get_users(force_reload=True), daemon=True).start()
+        users = _get_users(force_reload=True)
     with _INDEX_LOCK:
         index_info = {
             sec: {
