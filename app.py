@@ -299,15 +299,44 @@ def _load_users_from_sheets():
         return {}
 
 
+_USERS_LOADING = threading.Event()  # evita cargas simultáneas
+
+def _reload_users_sync():
+    """Carga usuarios desde Sheets de forma síncrona. Solo llamar desde threads de background."""
+    users = _load_users_from_sheets()
+    with _USERS_LOCK:
+        _USERS_CACHE.clear()
+        _USERS_CACHE.update(users)
+        _USERS_LOADED["ts"] = time.time()
+
 def _get_users(force_reload=False):
+    """Devuelve el caché de usuarios. Si necesita recarga, lo hace en background."""
     now = time.time()
     with _USERS_LOCK:
-        if force_reload or (now - _USERS_LOADED["ts"]) > 300:
-            users = _load_users_from_sheets()
-            _USERS_CACHE.clear()
-            _USERS_CACHE.update(users)
-            _USERS_LOADED["ts"] = now
-        return dict(_USERS_CACHE)
+        cache_age = now - _USERS_LOADED["ts"]
+        needs_reload = force_reload or cache_age > 300
+        current = dict(_USERS_CACHE)
+        cache_empty = not current
+
+    if needs_reload and not _USERS_LOADING.is_set():
+        # Cargar en background para no bloquear el worker HTTP
+        def _do_reload():
+            if _USERS_LOADING.is_set():
+                return
+            _USERS_LOADING.set()
+            try:
+                _reload_users_sync()
+            finally:
+                _USERS_LOADING.clear()
+        t = threading.Thread(target=_do_reload, daemon=True)
+        t.start()
+        # Si el caché está completamente vacío, esperar máximo 5s para la primera carga
+        if cache_empty:
+            t.join(timeout=5)
+            with _USERS_LOCK:
+                current = dict(_USERS_CACHE)
+
+    return current
 
 
 def _add_user_to_sheets(empresa, token):
@@ -321,7 +350,7 @@ def _add_user_to_sheets(empresa, token):
             valueInputOption="RAW",
             body={"values": [[empresa, token, "SI", fecha, ""]]}
         ).execute()
-        _get_users(force_reload=True)
+        _reload_users_sync()
         return True
     except Exception as e:
         print(f"[SHEETS] Error agregando usuario: {e}", flush=True)
@@ -347,7 +376,7 @@ def _set_user_password(token, new_password):
                     valueInputOption="RAW",
                     body={"values": [[hashed]]}
                 ).execute()
-                _get_users(force_reload=True)
+                _reload_users_sync()
                 return True
         return False
     except Exception as e:
@@ -373,7 +402,7 @@ def _set_user_status(token, activo):
                     valueInputOption="RAW",
                     body={"values": [[nuevo_estado]]}
                 ).execute()
-                _get_users(force_reload=True)
+                _reload_users_sync()
                 return True
         return False
     except Exception as e:
@@ -408,7 +437,7 @@ def _delete_user_from_sheets(token):
                         }
                     }]}
                 ).execute()
-                _get_users(force_reload=True)
+                _reload_users_sync()
                 return True
         return False
     except Exception as e:
