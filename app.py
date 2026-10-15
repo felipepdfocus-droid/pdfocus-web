@@ -1248,6 +1248,216 @@ def admin_rebuild_index():
     return jsonify({"ok": True, "mensaje": "Reconstrucción iniciada."})
 
 
+# ── RUTAS DE QR ───────────────────────────────────────────────
+@app.route("/admin/qr/<token_cliente>")
+def admin_qr_imagen(token_cliente):
+    """Devuelve el QR del enlace de acceso del cliente como imagen PNG."""
+    if not _check_admin():
+        return jsonify({"error": "No autorizado"}), 401
+    try:
+        import qrcode
+    except ImportError:
+        return "Librería qrcode no instalada. Agrega 'qrcode[pil]' a requirements.txt.", 500
+
+    url_cliente = f"https://pdfocus-web-1sbt.onrender.com/?token={token_cliente}"
+    qr = qrcode.QRCode(
+        version=None,
+        error_correction=qrcode.constants.ERROR_CORRECT_H,
+        box_size=10,
+        border=4,
+    )
+    qr.add_data(url_cliente)
+    qr.make(fit=True)
+    img = qr.make_image(fill_color="black", back_color="white")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+    return send_file(buf, mimetype="image/png", download_name=f"qr_{token_cliente}.png")
+
+
+@app.route("/admin/qr_page/<token_cliente>")
+def admin_qr_page(token_cliente):
+    """Página HTML con QR + info del cliente, lista para imprimir o compartir."""
+    if not _check_admin():
+        return redirect(url_for("admin_panel"))
+
+    users = _get_users()
+    user_info = users.get(token_cliente, {})
+    empresa = user_info.get("empresa", token_cliente)
+    url_cliente = f"https://pdfocus-web-1sbt.onrender.com/?token={token_cliente}"
+
+    # Generar QR como base64 para embeber en HTML
+    try:
+        import qrcode
+        qr = qrcode.QRCode(
+            version=None,
+            error_correction=qrcode.constants.ERROR_CORRECT_H,
+            box_size=12,
+            border=4,
+        )
+        qr.add_data(url_cliente)
+        qr.make(fit=True)
+        img = qr.make_image(fill_color="black", back_color="white")
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        qr_b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+        qr_src = f"data:image/png;base64,{qr_b64}"
+        qr_ok = True
+    except Exception as e:
+        qr_src = ""
+        qr_ok = False
+        qr_error = str(e)
+
+    html = f"""<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>QR — {empresa}</title>
+<style>
+  * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+  body {{
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: #f0f4f8;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }}
+  .card {{
+    background: white;
+    border-radius: 16px;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.10);
+    padding: 40px 32px 32px;
+    max-width: 420px;
+    width: 100%;
+    text-align: center;
+  }}
+  .logo {{
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 3px;
+    color: #94a3b8;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+  }}
+  h1 {{
+    font-size: 22px;
+    font-weight: 700;
+    color: #1e293b;
+    margin-bottom: 28px;
+  }}
+  .qr-wrap {{
+    background: white;
+    border: 2px solid #e2e8f0;
+    border-radius: 12px;
+    display: inline-block;
+    padding: 12px;
+    margin-bottom: 24px;
+  }}
+  .qr-wrap img {{ display: block; width: 220px; height: 220px; }}
+  .token-box {{
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 12px 16px;
+    margin-bottom: 12px;
+  }}
+  .token-label {{
+    font-size: 11px;
+    color: #94a3b8;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 4px;
+  }}
+  .token-value {{
+    font-family: 'Courier New', monospace;
+    font-size: 16px;
+    font-weight: 700;
+    color: #0f172a;
+    letter-spacing: 2px;
+  }}
+  .url-box {{
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 10px 16px;
+    margin-bottom: 24px;
+    word-break: break-all;
+    font-size: 12px;
+    color: #475569;
+  }}
+  .btns {{
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }}
+  .btn {{
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 10px 18px;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    text-decoration: none;
+    border: none;
+    transition: opacity .15s;
+  }}
+  .btn:hover {{ opacity: .85; }}
+  .btn-primary {{ background: #3b82f6; color: white; }}
+  .btn-outline {{ background: white; color: #374151; border: 1.5px solid #d1d5db; }}
+  .btn-green {{ background: #22c55e; color: white; }}
+  .back {{ margin-top: 20px; }}
+  .back a {{ font-size: 13px; color: #94a3b8; text-decoration: none; }}
+  .back a:hover {{ color: #3b82f6; }}
+  @media print {{
+    body {{ background: white; }}
+    .card {{ box-shadow: none; }}
+    .btns, .back {{ display: none; }}
+  }}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">PDFocus</div>
+  <h1>{empresa}</h1>
+
+  {"<div class='qr-wrap'><img src='" + qr_src + "' alt='QR Code'></div>" if qr_ok else f"<p style='color:red'>Error generando QR: {qr_error}</p>"}
+
+  <div class="token-box">
+    <div class="token-label">Token de acceso</div>
+    <div class="token-value">{token_cliente}</div>
+  </div>
+
+  <div class="url-box">{url_cliente}</div>
+
+  <div class="btns">
+    <a href="{url_cliente}" target="_blank" class="btn btn-primary">
+      🔗 Abrir enlace
+    </a>
+    <a href="/admin/qr/{token_cliente}" download="qr_{empresa}.png" class="btn btn-green">
+      ⬇ Descargar QR
+    </a>
+    <button onclick="window.print()" class="btn btn-outline">
+      🖨 Imprimir
+    </button>
+  </div>
+
+  <div class="back">
+    <a href="/admin">← Volver al panel</a>
+  </div>
+</div>
+</body>
+</html>"""
+
+    return html
+
+
 def _rebuild_all():
     if FOLDER_ID_MANIFIESTOS:
         build_index(FOLDER_ID_MANIFIESTOS, "manifiestos")
