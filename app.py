@@ -27,9 +27,9 @@ from flask import (
     render_template, redirect, url_for, make_response, session
 )
 from werkzeug.security import generate_password_hash, check_password_hash
+import requests as _requests
 from google.oauth2 import service_account
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
+from google.auth.transport.requests import Request as _AuthRequest
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "pdfocus_secret_2026_xK9mN3pQ")
@@ -75,7 +75,7 @@ _USERS_LOADED = {"ts": 0}
 _UPDATE_INTERVAL = 3600
 
 
-# ── GOOGLE SERVICES ───────────────────────────────────────────
+# ── GOOGLE SERVICES (REST directo — sin googleapiclient.discovery) ────────────
 def _get_credentials():
     info = json.loads(SERVICE_ACCOUNT_JSON)
     scopes = [
@@ -85,14 +85,83 @@ def _get_credentials():
     return service_account.Credentials.from_service_account_info(info, scopes=scopes)
 
 
-def _get_drive_service():
+def _get_token():
+    """Devuelve un access token válido para las APIs de Google."""
     creds = _get_credentials()
-    return build("drive", "v3", credentials=creds, cache_discovery=False)
+    creds.refresh(_AuthRequest())
+    return creds.token
 
 
-def _get_sheets_service():
-    creds = _get_credentials()
-    return build("sheets", "v4", credentials=creds, cache_discovery=False)
+def _drive_get(path, params=None):
+    token = _get_token()
+    url = f"https://www.googleapis.com/drive/v3/{path}"
+    r = _requests.get(url, headers={"Authorization": f"Bearer {token}"}, params=params or {})
+    r.raise_for_status()
+    return r.json()
+
+
+def _drive_get_media(file_id):
+    token = _get_token()
+    url = f"https://www.googleapis.com/drive/v3/files/{file_id}?alt=media"
+    r = _requests.get(url, headers={"Authorization": f"Bearer {token}"}, stream=True)
+    r.raise_for_status()
+    return r.content
+
+
+def _sheets_get(range_):
+    token = _get_token()
+    url = f"https://sheets.googleapis.com/v4/spreadsheets/{SHEETS_ID}/values/{_url_encode(range_)}"
+    r = _requests.get(url, headers={"Authorization": f"Bearer {token}"})
+    r.raise_for_status()
+    return r.json()
+
+
+def _sheets_update(range_, values):
+    token = _get_token()
+    url = f"https://sheets.googleapis.com/v4/spreadsheets/{SHEETS_ID}/values/{_url_encode(range_)}?valueInputOption=RAW"
+    r = _requests.put(url, headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                      json={"values": values})
+    r.raise_for_status()
+    return r.json()
+
+
+def _sheets_append(range_, values):
+    token = _get_token()
+    url = f"https://sheets.googleapis.com/v4/spreadsheets/{SHEETS_ID}/values/{_url_encode(range_)}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS"
+    r = _requests.post(url, headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                       json={"values": values})
+    r.raise_for_status()
+    return r.json()
+
+
+def _sheets_clear(range_):
+    token = _get_token()
+    url = f"https://sheets.googleapis.com/v4/spreadsheets/{SHEETS_ID}/values/{_url_encode(range_)}:clear"
+    r = _requests.post(url, headers={"Authorization": f"Bearer {token}"})
+    r.raise_for_status()
+    return r.json()
+
+
+def _sheets_batch_update(body):
+    token = _get_token()
+    url = f"https://sheets.googleapis.com/v4/spreadsheets/{SHEETS_ID}:batchUpdate"
+    r = _requests.post(url, headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                       json=body)
+    r.raise_for_status()
+    return r.json()
+
+
+def _sheets_get_meta():
+    token = _get_token()
+    url = f"https://sheets.googleapis.com/v4/spreadsheets/{SHEETS_ID}?fields=sheets.properties"
+    r = _requests.get(url, headers={"Authorization": f"Bearer {token}"})
+    r.raise_for_status()
+    return r.json()
+
+
+def _url_encode(s):
+    from urllib.parse import quote
+    return quote(s, safe="!$&'()*+,;=:@/")
 
 
 # ── CACHÉ EN GOOGLE SHEETS ────────────────────────────────────
@@ -102,16 +171,13 @@ def _get_sheets_service():
 # en chunks de 45.000 chars y se guarda una fila por chunk.
 # Hoja: CACHE_SHEET_NAME, columna A = número de chunk, columna B = datos.
 
-def _ensure_cache_sheet(svc):
+def _ensure_cache_sheet():
     """Crea la hoja pdfocus_cache si no existe."""
     try:
-        meta = svc.spreadsheets().get(spreadsheetId=SHEETS_ID).execute()
+        meta = _sheets_get_meta()
         names = [s["properties"]["title"] for s in meta.get("sheets", [])]
         if CACHE_SHEET_NAME not in names:
-            svc.spreadsheets().batchUpdate(
-                spreadsheetId=SHEETS_ID,
-                body={"requests": [{"addSheet": {"properties": {"title": CACHE_SHEET_NAME}}}]}
-            ).execute()
+            _sheets_batch_update({"requests": [{"addSheet": {"properties": {"title": CACHE_SHEET_NAME}}}]})
             print(f"[SHEETS-CACHE] Hoja '{CACHE_SHEET_NAME}' creada.", flush=True)
         return True
     except Exception as e:
@@ -144,21 +210,12 @@ def _save_index_to_drive():
         chunks = [b64[i:i+CACHE_CHUNK_SIZE] for i in range(0, len(b64), CACHE_CHUNK_SIZE)]
         print(f"[SHEETS-CACHE] Guardando {total} PDFs en {len(chunks)} chunks ({len(b64)} chars)...", flush=True)
 
-        svc = _get_sheets_service()
-        _ensure_cache_sheet(svc)
+        _ensure_cache_sheet()
 
         # Limpiar hoja y escribir chunks
-        svc.spreadsheets().values().clear(
-            spreadsheetId=SHEETS_ID,
-            range=f"{CACHE_SHEET_NAME}!A:B",
-        ).execute()
+        _sheets_clear(f"{CACHE_SHEET_NAME}!A:B")
         rows = [[str(i), chunk] for i, chunk in enumerate(chunks)]
-        svc.spreadsheets().values().update(
-            spreadsheetId=SHEETS_ID,
-            range=f"{CACHE_SHEET_NAME}!A1",
-            valueInputOption="RAW",
-            body={"values": rows},
-        ).execute()
+        _sheets_update(f"{CACHE_SHEET_NAME}!A1", rows)
         print(f"[SHEETS-CACHE] ✅ Caché guardado en Sheets: {total} PDFs, {len(chunks)} chunks.", flush=True)
     except Exception as e:
         print(f"[SHEETS-CACHE] Error guardando caché: {e}", flush=True)
@@ -167,11 +224,7 @@ def _save_index_to_drive():
 def _load_index_from_drive():
     """Carga el índice comprimido desde Google Sheets."""
     try:
-        svc = _get_sheets_service()
-        result = svc.spreadsheets().values().get(
-            spreadsheetId=SHEETS_ID,
-            range=f"{CACHE_SHEET_NAME}!A:B",
-        ).execute()
+        result = _sheets_get(f"{CACHE_SHEET_NAME}!A:B")
         rows = result.get("values", [])
         if not rows:
             print("[SHEETS-CACHE] No hay caché en Sheets.", flush=True)
@@ -271,11 +324,7 @@ def _load_index_from_disk():
 
 def _load_users_from_sheets():
     try:
-        svc = _get_sheets_service()
-        result = svc.spreadsheets().values().get(
-            spreadsheetId=SHEETS_ID,
-            range="usuarios_pdfocus!A2:E1000"
-        ).execute()
+        result = _sheets_get("usuarios_pdfocus!A2:E1000")
         rows = result.get("values", [])
         users = {}
         for row in rows:
@@ -342,14 +391,7 @@ def _get_users(force_reload=False):
 def _add_user_to_sheets(empresa, token):
     fecha = datetime.now().strftime("%Y-%m-%d %H:%M")
     try:
-        svc = _get_sheets_service()
-        # Columna E (password_hash) vacía al crear — admin la establece después
-        svc.spreadsheets().values().append(
-            spreadsheetId=SHEETS_ID,
-            range="usuarios_pdfocus!A:E",
-            valueInputOption="RAW",
-            body={"values": [[empresa, token, "SI", fecha, ""]]}
-        ).execute()
+        _sheets_append("usuarios_pdfocus!A:E", [[empresa, token, "SI", fecha, ""]])
         _reload_users_sync()
         return True
     except Exception as e:
@@ -360,22 +402,13 @@ def _add_user_to_sheets(empresa, token):
 def _set_user_password(token, new_password):
     """Establece o cambia la contraseña de una empresa. Guarda el hash en columna E."""
     try:
-        svc = _get_sheets_service()
-        result = svc.spreadsheets().values().get(
-            spreadsheetId=SHEETS_ID,
-            range="usuarios_pdfocus!B2:B1000"
-        ).execute()
+        result = _sheets_get("usuarios_pdfocus!B2:B1000")
         rows = result.get("values", [])
         for i, row in enumerate(rows):
             if row and row[0].strip() == token:
                 row_num = i + 2
                 hashed = generate_password_hash(new_password)
-                svc.spreadsheets().values().update(
-                    spreadsheetId=SHEETS_ID,
-                    range=f"usuarios_pdfocus!E{row_num}",
-                    valueInputOption="RAW",
-                    body={"values": [[hashed]]}
-                ).execute()
+                _sheets_update(f"usuarios_pdfocus!E{row_num}", [[hashed]])
                 _reload_users_sync()
                 return True
         return False
@@ -386,22 +419,13 @@ def _set_user_password(token, new_password):
 
 def _set_user_status(token, activo):
     try:
-        svc = _get_sheets_service()
-        result = svc.spreadsheets().values().get(
-            spreadsheetId=SHEETS_ID,
-            range="usuarios_pdfocus!B2:B1000"
-        ).execute()
+        result = _sheets_get("usuarios_pdfocus!B2:B1000")
         rows = result.get("values", [])
         for i, row in enumerate(rows):
             if row and row[0].strip() == token:
                 row_num = i + 2
                 nuevo_estado = "SI" if activo else "NO"
-                svc.spreadsheets().values().update(
-                    spreadsheetId=SHEETS_ID,
-                    range=f"usuarios_pdfocus!C{row_num}",
-                    valueInputOption="RAW",
-                    body={"values": [[nuevo_estado]]}
-                ).execute()
+                _sheets_update(f"usuarios_pdfocus!C{row_num}", [[nuevo_estado]])
                 _reload_users_sync()
                 return True
         return False
@@ -412,31 +436,23 @@ def _set_user_status(token, activo):
 
 def _delete_user_from_sheets(token):
     try:
-        svc = _get_sheets_service()
-        result = svc.spreadsheets().values().get(
-            spreadsheetId=SHEETS_ID,
-            range="usuarios_pdfocus!B2:B1000"
-        ).execute()
+        result = _sheets_get("usuarios_pdfocus!B2:B1000")
         rows = result.get("values", [])
         for i, row in enumerate(rows):
             if row and row[0].strip() == token:
                 row_num = i + 2
-                sheet_id = svc.spreadsheets().get(
-                    spreadsheetId=SHEETS_ID
-                ).execute()["sheets"][0]["properties"]["sheetId"]
-                svc.spreadsheets().batchUpdate(
-                    spreadsheetId=SHEETS_ID,
-                    body={"requests": [{
-                        "deleteDimension": {
-                            "range": {
-                                "sheetId": sheet_id,
-                                "dimension": "ROWS",
-                                "startIndex": row_num - 1,
-                                "endIndex": row_num,
-                            }
+                meta = _sheets_get_meta()
+                sheet_id = meta["sheets"][0]["properties"]["sheetId"]
+                _sheets_batch_update({"requests": [{
+                    "deleteDimension": {
+                        "range": {
+                            "sheetId": sheet_id,
+                            "dimension": "ROWS",
+                            "startIndex": row_num - 1,
+                            "endIndex": row_num,
                         }
-                    }]}
-                ).execute()
+                    }
+                }]})
                 _reload_users_sync()
                 return True
         return False
@@ -484,18 +500,19 @@ def _is_authenticated(token):
 
 # ── GOOGLE DRIVE — PDFs ───────────────────────────────────────
 def list_pdfs_in_folder(folder_id, include_modified_time=False):
-    svc = _get_drive_service()
 
     def _get_subfolders(fid):
         subs = []
         pt = None
         while True:
-            r = svc.files().list(
-                q=f"'{fid}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false",
-                fields="nextPageToken, files(id)",
-                pageSize=1000,
-                pageToken=pt,
-            ).execute()
+            params = {
+                "q": f"'{fid}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false",
+                "fields": "nextPageToken, files(id)",
+                "pageSize": 1000,
+            }
+            if pt:
+                params["pageToken"] = pt
+            r = _drive_get("files", params)
             subs.extend([f["id"] for f in r.get("files", [])])
             pt = r.get("nextPageToken")
             if not pt:
@@ -507,12 +524,14 @@ def list_pdfs_in_folder(folder_id, include_modified_time=False):
         pt = None
         fields = "nextPageToken, files(id, name, modifiedTime)" if include_modified_time else "nextPageToken, files(id, name)"
         while True:
-            r = svc.files().list(
-                q=f"'{fid}' in parents and mimeType='application/pdf' and trashed=false",
-                fields=fields,
-                pageSize=1000,
-                pageToken=pt,
-            ).execute()
+            params = {
+                "q": f"'{fid}' in parents and mimeType='application/pdf' and trashed=false",
+                "fields": fields,
+                "pageSize": 1000,
+            }
+            if pt:
+                params["pageToken"] = pt
+            r = _drive_get("files", params)
             pdfs.extend(r.get("files", []))
             pt = r.get("nextPageToken")
             if not pt:
@@ -533,15 +552,7 @@ def list_pdfs_in_folder(folder_id, include_modified_time=False):
 
 
 def download_pdf_bytes(file_id):
-    svc = _get_drive_service()
-    req = svc.files().get_media(fileId=file_id)
-    buf = io.BytesIO()
-    dl = MediaIoBaseDownload(buf, req)
-    done = False
-    while not done:
-        _, done = dl.next_chunk()
-    buf.seek(0)
-    return buf.read()
+    return _drive_get_media(file_id)
 
 
 # ── NORMALIZACIÓN ─────────────────────────────────────────────
@@ -1218,11 +1229,7 @@ def admin_rebuild_index():
 
     def _delete_drive_cache_and_rebuild():
         try:
-            svc = _get_sheets_service()
-            svc.spreadsheets().values().clear(
-                spreadsheetId=SHEETS_ID,
-                range=f"{CACHE_SHEET_NAME}!A:B",
-            ).execute()
+            _sheets_clear(f"{CACHE_SHEET_NAME}!A:B")
             print("[SHEETS-CACHE] Caché en Sheets eliminado.", flush=True)
         except Exception as e:
             print(f"[SHEETS-CACHE] Error eliminando caché: {e}", flush=True)
