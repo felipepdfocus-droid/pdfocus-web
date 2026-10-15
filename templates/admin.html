@@ -648,6 +648,39 @@
   document.getElementById("nueva-empresa").addEventListener("keypress", function(e) {
     if (e.key === "Enter") agregarEmpresa();
   });
+
+  // Auto-refresh contadores cada 30 segundos
+  async function refreshCounters() {
+    try {
+      const r = await fetch("/admin/index_status");
+      if (!r.ok) return;
+      const d = await r.json();
+      if (d.error) return;
+
+      // Manifiestos
+      if (d.manifiestos !== undefined) {
+        const cards = document.querySelectorAll(".status-card");
+        if (cards[0]) {
+          cards[0].querySelector(".count").textContent = d.manifiestos.pdfs;
+          const dot = cards[0].querySelector(".dot");
+          dot.className = "dot " + (d.manifiestos.listo ? "ok" : "no");
+          dot.textContent = d.manifiestos.listo ? "Listo" : "Cargando";
+        }
+      }
+      // Facturas
+      if (d.facturas !== undefined) {
+        const cards = document.querySelectorAll(".status-card");
+        if (cards[1]) {
+          cards[1].querySelector(".count").textContent = d.facturas.pdfs;
+          const dot = cards[1].querySelector(".dot");
+          dot.className = "dot " + (d.facturas.listo ? "ok" : "no");
+          dot.textContent = d.facturas.listo ? "Listo" : "Cargando";
+        }
+      }
+    } catch (e) { /* silencioso */ }
+  }
+
+  setInterval(refreshCounters, 30000);
 </script>
 
 </body>
