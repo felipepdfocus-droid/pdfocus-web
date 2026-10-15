@@ -165,12 +165,6 @@ def _url_encode(s):
 
 
 # ── CACHÉ EN GOOGLE SHEETS ────────────────────────────────────
-# Usamos Sheets en vez de Drive porque los service accounts no tienen
-# cuota de almacenamiento propia en Drive.
-# El índice se comprime (gzip) y codifica en base64, luego se divide
-# en chunks de 45.000 chars y se guarda una fila por chunk.
-# Hoja: CACHE_SHEET_NAME, columna A = número de chunk, columna B = datos.
-
 def _ensure_cache_sheet():
     """Crea la hoja pdfocus_cache si no existe."""
     try:
@@ -1147,6 +1141,22 @@ def admin_panel():
     return render_template("admin.html", users=users, index_info=index_info)
 
 
+# ── FIX: endpoint para que admin refresque contadores en tiempo real ──
+@app.route("/admin/index_status")
+def admin_index_status():
+    if not _check_admin():
+        return jsonify({"error": "No autorizado"}), 401
+    with _INDEX_LOCK:
+        info = {
+            sec: {
+                "listo": _INDEX_BUILT.get(sec, False),
+                "pdfs": len(_INDEX_CACHE.get(sec, {})),
+            }
+            for sec in ("manifiestos", "facturas")
+        }
+    return jsonify(info)
+
+
 @app.route("/admin/login", methods=["POST"])
 def admin_login():
     token = request.form.get("admin_token", "").strip()
@@ -1465,8 +1475,9 @@ def _rebuild_all():
         build_index(FOLDER_ID_FACTURAS, "facturas")
 
 
-# ── ACTUALIZACIÓN INCREMENTAL CADA HORA ──────────────────────
+# ── ACTUALIZACIÓN INCREMENTAL CADA 15 MINUTOS ────────────────
 def _hourly_update_loop():
+    # Esperar a que el índice esté listo antes de empezar el ciclo
     while not (_INDEX_BUILT.get("manifiestos") and _INDEX_BUILT.get("facturas")):
         time.sleep(60)
     while True:
@@ -1494,36 +1505,44 @@ def _start_index_background():
             return
 
         def _run_update():
+            """Corre actualización incremental inmediatamente después de cargar caché."""
+            print("[STARTUP] Corriendo actualización incremental de arranque...", flush=True)
             if FOLDER_ID_MANIFIESTOS:
-                try: update_index_incremental(FOLDER_ID_MANIFIESTOS, "manifiestos")
-                except Exception as e: print(f"[STARTUP] {e}", flush=True)
+                try:
+                    update_index_incremental(FOLDER_ID_MANIFIESTOS, "manifiestos")
+                except Exception as e:
+                    print(f"[STARTUP] Error update manifiestos: {e}", flush=True)
             if FOLDER_ID_FACTURAS:
-                try: update_index_incremental(FOLDER_ID_FACTURAS, "facturas")
-                except Exception as e: print(f"[STARTUP] {e}", flush=True)
+                try:
+                    update_index_incremental(FOLDER_ID_FACTURAS, "facturas")
+                except Exception as e:
+                    print(f"[STARTUP] Error update facturas: {e}", flush=True)
+            print("[STARTUP] Actualización incremental de arranque completada.", flush=True)
 
-        # 1. Caché local /tmp (reinicios rápidos)
+        # 1. Caché local /tmp (reinicios rápidos del mismo worker)
         if _load_index_from_disk():
-            print("[STARTUP] ✅ Índice desde /tmp. La actualización incremental se hará en 1 hora.", flush=True)
-            # No correr update incremental en startup — el hourly loop lo hará en 1 hora.
+            print("[STARTUP] ✅ Índice desde /tmp. Corriendo incremental de arranque...", flush=True)
+            _run_update()
             return
 
-        # 2. Caché en Sheets (sobrevive deploys)
+        # 2. Caché en Sheets (sobrevive deploys y reinicios de worker)
         if _load_index_from_drive():
             total = sum(len(v) for v in _INDEX_CACHE.values())
-            print(f"[STARTUP] ✅ Índice desde Sheets ({total} PDFs). La actualización incremental se hará en 1 hora.", flush=True)
-            # No correr update incremental en startup — el hourly loop lo hará en 1 hora.
-            # Esto evita re-descargar todos los PDFs en cada deploy.
+            print(f"[STARTUP] ✅ Índice desde Sheets ({total} PDFs). Corriendo incremental de arranque...", flush=True)
+            _run_update()
             return
 
         # 3. Construir desde cero
         print("[STARTUP] Sin caché. Construyendo desde cero...", flush=True)
         if FOLDER_ID_MANIFIESTOS:
-            try: build_index(FOLDER_ID_MANIFIESTOS, "manifiestos")
+            try:
+                build_index(FOLDER_ID_MANIFIESTOS, "manifiestos")
             except Exception as e:
                 print(f"[STARTUP] Error manifiestos: {e}", flush=True)
                 traceback.print_exc()
         if FOLDER_ID_FACTURAS:
-            try: build_index(FOLDER_ID_FACTURAS, "facturas")
+            try:
+                build_index(FOLDER_ID_FACTURAS, "facturas")
             except Exception as e:
                 print(f"[STARTUP] Error facturas: {e}", flush=True)
                 traceback.print_exc()
