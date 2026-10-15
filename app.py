@@ -1277,16 +1277,16 @@ def _start_index_background():
 
         # 1. Caché local /tmp (reinicios rápidos)
         if _load_index_from_disk():
-            print("[STARTUP] ✅ Índice desde /tmp.", flush=True)
-            threading.Thread(target=_run_update, daemon=True).start()
+            print("[STARTUP] ✅ Índice desde /tmp. La actualización incremental se hará en 1 hora.", flush=True)
+            # No correr update incremental en startup — el hourly loop lo hará en 1 hora.
             return
 
         # 2. Caché en Sheets (sobrevive deploys)
         if _load_index_from_drive():
             total = sum(len(v) for v in _INDEX_CACHE.values())
-            print(f"[STARTUP] ✅ Índice desde Sheets ({total} PDFs).", flush=True)
-            # Siempre correr update incremental — completa PDFs faltantes y actualiza modificados
-            threading.Thread(target=_run_update, daemon=True).start()
+            print(f"[STARTUP] ✅ Índice desde Sheets ({total} PDFs). La actualización incremental se hará en 1 hora.", flush=True)
+            # No correr update incremental en startup — el hourly loop lo hará en 1 hora.
+            # Esto evita re-descargar todos los PDFs en cada deploy.
             return
 
         # 3. Construir desde cero
