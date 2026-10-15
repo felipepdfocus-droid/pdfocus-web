@@ -1,6 +1,5 @@
-flask
-gunicorn
-pymupdf
-google-api-python-client
-google-auth
-werkzeug
+flask==3.0.3
+PyMuPDF
+google-auth==2.30.0
+requests==2.32.3
+gunicorn==22.0.0
