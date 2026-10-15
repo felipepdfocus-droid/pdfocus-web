@@ -3,3 +3,4 @@ PyMuPDF
 google-auth==2.30.0
 requests==2.32.3
 gunicorn==22.0.0
+qrcode[pil]
