@@ -254,6 +254,9 @@
       border: 1px solid transparent;
       transition: all 0.2s;
       white-space: nowrap;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
     }
 
     .btn-copy   { background: rgba(100,116,139,0.12); border-color: #334155; color: #94a3b8; }
@@ -261,6 +264,9 @@
 
     .btn-pass   { background: rgba(168,85,247,0.1); border-color: rgba(168,85,247,0.3); color: #c084fc; }
     .btn-pass:hover { background: rgba(168,85,247,0.2); }
+
+    .btn-qr     { background: rgba(20,184,166,0.1); border-color: rgba(20,184,166,0.3); color: #2dd4bf; }
+    .btn-qr:hover { background: rgba(20,184,166,0.2); }
 
     .btn-deact  { background: rgba(234,179,8,0.1); border-color: rgba(234,179,8,0.3); color: #facc15; }
     .btn-deact:hover { background: rgba(234,179,8,0.2); }
@@ -483,6 +489,8 @@
                 onclick="copyURL('{{ token }}')">Copiar URL</button>
               <button class="btn-sm btn-pass"
                 onclick="openPasswordModal('{{ token }}', '{{ u.empresa }}')">🔑 Contraseña</button>
+              <a class="btn-sm btn-qr"
+                href="/admin/qr_page/{{ token }}" target="_blank">📱 QR</a>
               <button class="btn-sm btn-deact"
                 onclick="toggleEmpresa('{{ token }}', false)">Desactivar</button>
               <button class="btn-sm btn-del"
