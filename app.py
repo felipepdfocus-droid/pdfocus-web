@@ -222,53 +222,62 @@ def _save_index_to_drive():
 
 
 def _load_index_from_drive():
-    """Carga el índice comprimido desde Google Sheets."""
-    try:
-        result = _sheets_get(f"{CACHE_SHEET_NAME}!A:B")
-        rows = result.get("values", [])
-        if not rows:
-            print("[SHEETS-CACHE] No hay caché en Sheets.", flush=True)
-            return False
-        # Ordenar por número de chunk y concatenar
-        rows.sort(key=lambda r: int(r[0]) if r and r[0].isdigit() else 0)
-        b64 = "".join(r[1] for r in rows if len(r) > 1)
-        if not b64:
-            return False
-        compressed = base64.b64decode(b64)
-        json_bytes = gzip.decompress(compressed)
-        data = json.loads(json_bytes.decode("utf-8"))
-        if not data:
-            return False
-        # Comprimir compact en memoria para ahorrar RAM
-        for sec_key, entries in data.items():
-            for fid, info in entries.items():
-                if isinstance(info.get("compact"), str):
-                    info["compact"] = _compress_compact(info["compact"])
-        with _INDEX_LOCK:
-            _INDEX_CACHE.clear()
-            _INDEX_CACHE.update(data)
-            for sec_key in ("manifiestos", "facturas"):
-                if sec_key in data and len(data[sec_key]) > 0:
-                    _INDEX_BUILT[sec_key] = True
-        total = sum(len(v) for v in data.values())
-        print(f"[SHEETS-CACHE] ✅ Índice cargado desde Sheets: {total} PDFs.", flush=True)
+    """Carga el índice comprimido desde Google Sheets. Reintenta 3 veces."""
+    for intento in range(1, 4):
         try:
-            # Guardar en disco con compact como string (para compatibilidad)
-            disk_data = {}
+            print(f"[SHEETS-CACHE] Intento {intento}/3 de carga desde Sheets...", flush=True)
+            result = _sheets_get(f"{CACHE_SHEET_NAME}!A:B")
+            rows = result.get("values", [])
+            if not rows:
+                print("[SHEETS-CACHE] No hay caché en Sheets.", flush=True)
+                return False
+            # Ordenar por número de chunk y concatenar
+            rows.sort(key=lambda r: int(r[0]) if r and r[0].isdigit() else 0)
+            b64 = "".join(r[1] for r in rows if len(r) > 1)
+            if not b64:
+                print("[SHEETS-CACHE] Caché vacío (sin datos en columna B).", flush=True)
+                return False
+            print(f"[SHEETS-CACHE] {len(rows)} chunks leídos ({len(b64)} chars). Descomprimiendo...", flush=True)
+            compressed = base64.b64decode(b64)
+            json_bytes = gzip.decompress(compressed)
+            data = json.loads(json_bytes.decode("utf-8"))
+            if not data:
+                print("[SHEETS-CACHE] JSON vacío tras descomprimir.", flush=True)
+                return False
+            # Comprimir compact en memoria para ahorrar RAM
             for sec_key, entries in data.items():
-                disk_data[sec_key] = {}
                 for fid, info in entries.items():
-                    disk_data[sec_key][fid] = dict(info)
-                    if isinstance(info.get("compact"), bytes):
-                        disk_data[sec_key][fid]["compact"] = _decompress_compact(info["compact"])
-            with open(INDEX_CACHE_PATH, "w", encoding="utf-8") as f:
-                json.dump(disk_data, f, ensure_ascii=False)
-        except Exception:
-            pass
-        return True
-    except Exception as e:
-        print(f"[SHEETS-CACHE] Error cargando caché: {e}", flush=True)
-        return False
+                    if isinstance(info.get("compact"), str):
+                        info["compact"] = _compress_compact(info["compact"])
+            with _INDEX_LOCK:
+                _INDEX_CACHE.clear()
+                _INDEX_CACHE.update(data)
+                for sec_key in ("manifiestos", "facturas"):
+                    if sec_key in data and len(data[sec_key]) > 0:
+                        _INDEX_BUILT[sec_key] = True
+            total = sum(len(v) for v in data.values())
+            print(f"[SHEETS-CACHE] ✅ Índice cargado desde Sheets: {total} PDFs.", flush=True)
+            try:
+                # Guardar en disco con compact como string (para compatibilidad)
+                disk_data = {}
+                for sec_key, entries in data.items():
+                    disk_data[sec_key] = {}
+                    for fid, info in entries.items():
+                        disk_data[sec_key][fid] = dict(info)
+                        if isinstance(info.get("compact"), bytes):
+                            disk_data[sec_key][fid]["compact"] = _decompress_compact(info["compact"])
+                with open(INDEX_CACHE_PATH, "w", encoding="utf-8") as f:
+                    json.dump(disk_data, f, ensure_ascii=False)
+            except Exception:
+                pass
+            return True
+        except Exception as e:
+            print(f"[SHEETS-CACHE] ❌ Error intento {intento}/3: {e}", flush=True)
+            traceback.print_exc()
+            if intento < 3:
+                time.sleep(5)
+    print("[SHEETS-CACHE] ❌ Falló carga desde Sheets después de 3 intentos.", flush=True)
+    return False
 
 
 def _save_index_to_disk():
