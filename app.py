@@ -71,8 +71,8 @@ _USERS_CACHE  = {}
 _USERS_LOCK   = threading.Lock()
 _USERS_LOADED = {"ts": 0}
 
-# Intervalo de actualización incremental (1 hora)
-_UPDATE_INTERVAL = 3600
+# Intervalo de actualización incremental (15 minutos)
+_UPDATE_INTERVAL = 900
 
 
 # ── GOOGLE SERVICES (REST directo — sin googleapiclient.discovery) ────────────
