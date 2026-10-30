@@ -1192,12 +1192,22 @@ def ensure_index(section_key, folder_id):
 
 
 def _indexar_carpetas_en_background(fids, reconstruir=False):
-    # Mientras el índice todavía se carga al arrancar, una actualización creería que
-    # las carpetas están vacías y las reindexaría completas. En ese caso no se hace:
-    # la revisión automática las tomará cuando el arranque termine.
-    if not _STARTUP_DONE.is_set():
-        print("[INDEX] Índice aún cargando; la actualización queda para la revisión automática.", flush=True)
-        return False
+    """
+    Actualiza (o reconstruye) carpetas en segundo plano. Devuelve False si no se pudo.
+
+    Protección: una carpeta cuyo índice todavía NO está cargado en memoria y que el
+    arranque aún no ha procesado no se toca, porque la actualización la creería vacía y
+    la volvería a indexar completa. Las carpetas ya cargadas se actualizan siempre.
+    """
+    if not reconstruir:
+        with _INDEX_LOCK:
+            cargadas = [f for f in fids if _INDEX_BUILT.get(f)]
+        pendientes = [f for f in fids if f not in cargadas]
+        if pendientes and not _STARTUP_DONE.is_set():
+            print(f"[INDEX] {len(pendientes)} carpeta(s) aún cargando; quedan para la revisión automática.", flush=True)
+            fids = cargadas
+        if not fids:
+            return False
     def _run():
         for fid in fids:
             try:
