@@ -73,7 +73,7 @@
     /* CARDS DE ESTADO */
     .status-grid {
       display: grid;
-      grid-template-columns: 1fr 1fr;
+      grid-template-columns: 1fr 1fr 1fr;
       gap: 16px;
       margin-bottom: 32px;
     }
@@ -277,6 +277,63 @@
     .btn-del    { background: rgba(239,68,68,0.1); border-color: rgba(239,68,68,0.3); color: #f87171; }
     .btn-del:hover { background: rgba(239,68,68,0.2); }
 
+    .btn-fold   { background: rgba(59,130,246,0.1); border-color: rgba(59,130,246,0.3); color: #60a5fa; }
+    .btn-fold:hover { background: rgba(59,130,246,0.2); }
+
+    .btn-reidx  { background: rgba(100,116,139,0.12); border-color: #334155; color: #94a3b8; }
+    .btn-reidx:hover { background: rgba(100,116,139,0.2); color: #cbd5e1; }
+
+    .tipo-badge {
+      display: inline-block;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.6px;
+      text-transform: uppercase;
+      padding: 2px 8px;
+      border-radius: 20px;
+      margin-left: 6px;
+      vertical-align: middle;
+    }
+    .tipo-EMPRESA   { background: rgba(100,116,139,0.15); color: #94a3b8; }
+    .tipo-UNIVERSAL { background: rgba(20,184,166,0.15); color: #2dd4bf; }
+    .tipo-GENERAL   { background: rgba(245,158,11,0.15); color: #fbbf24; }
+
+    .docs-line { font-size: 11px; color: #64748b; margin-top: 4px; font-weight: 400; }
+    .docs-line .warn { color: #fbbf24; }
+
+    tr.inactiva td { opacity: 0.45; }
+    tr.inactiva td:last-child { opacity: 1; }
+    .estado-off { color: #f87171; font-size: 11px; font-weight: 600; }
+
+    .add-form select {
+      background: #0f1117;
+      border: 1px solid #2d3148;
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-size: 14px;
+      color: #f1f5f9;
+      outline: none;
+    }
+    .add-hint { padding: 0 24px 18px; font-size: 12px; color: #64748b; line-height: 1.6; }
+    .add-hint b { color: #94a3b8; }
+    .aviso {
+      margin: 0 24px 18px;
+      padding: 10px 14px;
+      border-radius: 8px;
+      background: rgba(245,158,11,0.1);
+      border: 1px solid rgba(245,158,11,0.3);
+      color: #fbbf24;
+      font-size: 12px;
+    }
+
+    .modal.wide { max-width: 520px; }
+    .modal .field-row { display: flex; gap: 8px; align-items: center; margin-bottom: 14px; }
+    .modal .field-row input { margin-bottom: 0; flex: 1; font-size: 12px; }
+    .modal .field-row a { font-size: 12px; color: #60a5fa; text-decoration: none; white-space: nowrap; }
+    .modal .check { display: flex; gap: 8px; align-items: center; font-size: 13px; color: #94a3b8; margin: 4px 0 20px; }
+    .modal .check input { width: auto; margin: 0; }
+    .btn-save.blue { background: #3b82f6; }
+
     .pw-set   { color: #4ade80; font-size: 11px; }
     .pw-unset { color: #64748b; font-size: 11px; }
 
@@ -408,6 +465,7 @@
     @media (max-width: 600px) {
       .status-grid { grid-template-columns: 1fr; }
       .add-form { flex-direction: column; }
+      table { display: block; overflow-x: auto; }
       thead th:nth-child(3), td:nth-child(3) { display: none; }
     }
   </style>
@@ -444,6 +502,15 @@
         </div>
       </div>
     </div>
+    <div class="status-card">
+      <div>
+        <div class="label">Otros documentos</div>
+        <div class="count">{{ index_info.otros.pdfs }}</div>
+        <div class="dot {{ 'ok' if index_info.otros.listo else 'no' }}">
+          {{ 'Listo' if index_info.otros.listo else 'Cargando' }}
+        </div>
+      </div>
+    </div>
   </div>
 
   <div class="rebuild-row">
@@ -456,9 +523,22 @@
       <h2>Agregar empresa</h2>
     </div>
     <div class="add-form">
-      <input type="text" id="nueva-empresa" placeholder="Nombre de la empresa" />
-      <button class="btn-primary" onclick="agregarEmpresa()">Crear acceso</button>
+      <input type="text" id="nueva-empresa" placeholder="Nombre de la empresa o perfil" />
+      <select id="nuevo-tipo">
+        <option value="EMPRESA">Empresa</option>
+        <option value="UNIVERSAL">Universal (solo manifiestos)</option>
+        <option value="GENERAL">General (acceso a todo)</option>
+      </select>
+      <button class="btn-primary" id="btn-crear" onclick="agregarEmpresa()">Crear acceso</button>
     </div>
+    <div class="add-hint">
+      <b>Empresa:</b> se le crean sus carpetas en Drive (Manifiestos, Facturas, Otros documentos) y solo ve lo suyo.<br>
+      <b>Universal:</b> solo consulta la carpeta de manifiestos compartidos{% if carpeta_universal %} (ya existe; todos los perfiles universales usan la misma){% endif %}.<br>
+      <b>General:</b> ve los documentos de todas las empresas y de la universal.
+    </div>
+    {% if not raiz_ok %}
+    <div class="aviso">⚠ Falta la variable <b>FOLDER_RAIZ_EMPRESAS</b> en Render: sin ella no se pueden crear carpetas automáticas (los perfiles General sí se pueden crear).</div>
+    {% endif %}
   </section>
 
   <!-- Tabla de empresas -->
@@ -480,8 +560,19 @@
       </thead>
       <tbody>
         {% for token, u in users.items() %}
-        <tr id="row-{{ token }}">
-          <td class="empresa">{{ u.empresa }}</td>
+        <tr id="row-{{ token }}" class="{{ '' if u.activo else 'inactiva' }}">
+          <td class="empresa">
+            {{ u.empresa }}<span class="tipo-badge tipo-{{ u.tipo }}">{{ u.tipo|lower }}</span>
+            <div class="docs-line">
+              {% if u.tipo == 'GENERAL' %}
+                Acceso a todo ·
+              {% elif u.legado %}
+                <span class="warn">Carpetas compartidas (las de siempre)</span> ·
+              {% endif %}
+              📋 {{ u.conteo.get('manifiestos', 0) }}
+              {% if u.tipo != 'UNIVERSAL' %} · 🧾 {{ u.conteo.get('facturas', 0) }} · 📁 {{ u.conteo.get('otros', 0) }}{% endif %}
+            </div>
+          </td>
           <td><span class="token-text">{{ token }}</span></td>
           <td>
             {% if u.password_hash %}
@@ -490,19 +581,33 @@
               <span class="pw-unset">Sin contraseña</span>
             {% endif %}
           </td>
-          <td>{{ u.fecha_creacion }}</td>
+          <td>
+            {{ u.fecha_creacion }}
+            {% if not u.activo %}<div class="estado-off">DESACTIVADA</div>{% endif %}
+          </td>
           <td>
             <div class="actions">
               <button class="btn-sm btn-copy"
-                onclick="copyURL('{{ token }}')">Copiar URL</button>
+                onclick='copyURL({{ token|tojson }})'>Copiar URL</button>
               <button class="btn-sm btn-pass"
-                onclick="openPasswordModal('{{ token }}', '{{ u.empresa }}')">🔑 Contraseña</button>
+                onclick='openPasswordModal({{ token|tojson }}, {{ u.empresa|tojson }})'>🔑 Contraseña</button>
               <a class="btn-sm btn-qr"
                 href="/admin/qr_page/{{ token }}" target="_blank">📱 QR</a>
+              {% if u.tipo != 'GENERAL' %}
+              <button class="btn-sm btn-fold"
+                onclick='openCarpetas({{ token|tojson }}, {{ u.empresa|tojson }}, {{ u.tipo|tojson }}, {{ u.carpetas|tojson }}, {{ u.legado|tojson }})'>📁 Carpetas</button>
+              {% endif %}
+              <button class="btn-sm btn-reidx"
+                onclick='reindexar({{ token|tojson }}, {{ u.empresa|tojson }})'>⟳ Reindexar</button>
+              {% if u.activo %}
               <button class="btn-sm btn-deact"
-                onclick="toggleEmpresa('{{ token }}', false)">Desactivar</button>
+                onclick='toggleEmpresa({{ token|tojson }}, false)'>Desactivar</button>
+              {% else %}
+              <button class="btn-sm btn-act"
+                onclick='toggleEmpresa({{ token|tojson }}, true)'>Activar</button>
+              {% endif %}
               <button class="btn-sm btn-del"
-                onclick="eliminarEmpresa('{{ token }}', '{{ u.empresa }}')">Eliminar</button>
+                onclick='eliminarEmpresa({{ token|tojson }}, {{ u.empresa|tojson }})'>Eliminar</button>
             </div>
           </td>
         </tr>
@@ -533,10 +638,39 @@
   </div>
 </div>
 
+<!-- Modal carpetas -->
+<div class="modal-overlay" id="fold-modal">
+  <div class="modal wide">
+    <h3>Carpetas de <span id="fold-empresa"></span></h3>
+    <p>Pega el link (o el ID) de cada carpeta de Drive. Si dejas alguna vacía y marcas la casilla, se crea automáticamente.</p>
+    <input type="hidden" id="fold-token" />
+    <div id="fold-legado" class="aviso" style="margin:0 0 16px">
+      Hoy usa las carpetas compartidas de siempre. Para dejarle esas mismas carpetas y crearle solo "Otros documentos", usa el botón <b>"Usar las de siempre"</b>.
+    </div>
+    <label>📋 Manifiestos</label>
+    <div class="field-row"><input type="text" id="fold-manifiestos" placeholder="Link o ID de la carpeta" /><a id="lnk-manifiestos" target="_blank">Abrir ↗</a></div>
+    <div id="fold-extra">
+      <label>🧾 Facturas</label>
+      <div class="field-row"><input type="text" id="fold-facturas" placeholder="Link o ID de la carpeta" /><a id="lnk-facturas" target="_blank">Abrir ↗</a></div>
+      <label>📁 Otros documentos</label>
+      <div class="field-row"><input type="text" id="fold-otros" placeholder="Link o ID de la carpeta" /><a id="lnk-otros" target="_blank">Abrir ↗</a></div>
+    </div>
+    <label class="check"><input type="checkbox" id="fold-crear" checked /> Crear automáticamente las que estén vacías</label>
+    <div class="modal-actions">
+      <button class="btn-cancel" id="btn-legado" onclick="usarLegado()">Usar las de siempre</button>
+      <button class="btn-cancel" onclick="closeCarpetas()">Cancelar</button>
+      <button class="btn-save blue" id="btn-fold-save" onclick="saveCarpetas()">Guardar</button>
+    </div>
+  </div>
+</div>
+
 <div id="toast"></div>
 
 <script>
   const BASE = "";
+  const BASE_URL = {{ base_url|tojson }};
+  const LEGADO = {{ legado|tojson }};
+  const linkCarpeta = id => id ? `https://drive.google.com/drive/folders/${id}` : "";
 
   function toast(msg, ok = true) {
     const t = document.getElementById("toast");
@@ -547,7 +681,7 @@
   }
 
   function copyURL(token) {
-    const url = `https://pdfocus-web-1sbt.onrender.com/?token=${token}`;
+    const url = `${BASE_URL}/?token=${token}`;
     navigator.clipboard.writeText(url)
       .then(() => toast("URL copiada al portapapeles ✓"))
       .catch(() => {
@@ -557,14 +691,21 @@
 
   async function agregarEmpresa() {
     const nombre = document.getElementById("nueva-empresa").value.trim();
+    const tipo = document.getElementById("nuevo-tipo").value;
     if (!nombre) { toast("Escribe el nombre de la empresa", false); return; }
 
-    const r = await fetch("/admin/agregar_empresa", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ empresa: nombre })
-    });
-    const d = await r.json();
+    const btn = document.getElementById("btn-crear");
+    btn.disabled = true; btn.textContent = "Creando…";
+    let d;
+    try {
+      const r = await fetch("/admin/agregar_empresa", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ empresa: nombre, tipo })
+      });
+      d = await r.json();
+    } catch (e) { d = { error: "Error de conexión" }; }
+    btn.disabled = false; btn.textContent = "Crear acceso";
     if (d.ok) {
       toast(`✓ ${d.empresa} creada — Token: ${d.token}`);
       document.getElementById("nueva-empresa").value = "";
@@ -605,6 +746,73 @@
       toast("Error al eliminar", false);
     }
   }
+
+  async function reindexar(token, nombre) {
+    if (!confirm(`¿Reindexar los documentos de "${nombre}"? Puede tardar unos minutos.`)) return;
+    const r = await fetch("/admin/rebuild_empresa", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token })
+    });
+    const d = await r.json();
+    toast(d.ok ? `Reindexando ${nombre} ✓` : (d.error || "Error"), d.ok);
+  }
+
+  // Modal carpetas
+  function setCampo(t, id) {
+    document.getElementById(`fold-${t}`).value = id ? linkCarpeta(id) : "";
+    const a = document.getElementById(`lnk-${t}`);
+    a.href = linkCarpeta(id); a.style.visibility = id ? "visible" : "hidden";
+  }
+  function openCarpetas(token, empresa, tipo, carpetas, legado) {
+    document.getElementById("fold-token").value = token;
+    document.getElementById("fold-empresa").textContent = empresa;
+    const universal = tipo === "UNIVERSAL";
+    document.getElementById("fold-extra").style.display = universal ? "none" : "block";
+    document.getElementById("fold-legado").style.display = legado ? "block" : "none";
+    document.getElementById("btn-legado").style.display = (!universal && (LEGADO.manifiestos || LEGADO.facturas)) ? "inline-block" : "none";
+    ["manifiestos", "facturas", "otros"].forEach(t => setCampo(t, (carpetas || {})[t] || ""));
+    document.getElementById("fold-modal").classList.add("open");
+  }
+  function usarLegado() {
+    setCampo("manifiestos", LEGADO.manifiestos || "");
+    setCampo("facturas", LEGADO.facturas || "");
+    toast("Listo: se usarán las carpetas de siempre. Revisa y guarda.");
+  }
+  function closeCarpetas() {
+    document.getElementById("fold-modal").classList.remove("open");
+  }
+  async function saveCarpetas() {
+    const body = {
+      token: document.getElementById("fold-token").value,
+      manifiestos: document.getElementById("fold-manifiestos").value.trim(),
+      facturas: document.getElementById("fold-facturas").value.trim(),
+      otros: document.getElementById("fold-otros").value.trim(),
+      crear_faltantes: document.getElementById("fold-crear").checked,
+    };
+    const btn = document.getElementById("btn-fold-save");
+    btn.disabled = true; btn.textContent = "Guardando…";
+    let d;
+    try {
+      const r = await fetch("/admin/carpetas", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
+      d = await r.json();
+    } catch (e) { d = { error: "Error de conexión" }; }
+    btn.disabled = false; btn.textContent = "Guardar";
+    if (d.ok) {
+      toast("Carpetas guardadas ✓ Indexando en segundo plano");
+      closeCarpetas();
+      setTimeout(() => location.reload(), 1500);
+    } else {
+      toast(d.error || "Error al guardar", false);
+    }
+  }
+  document.getElementById("fold-modal").addEventListener("click", function(e) {
+    if (e.target === this) closeCarpetas();
+  });
 
   async function rebuildIndex() {
     if (!confirm("¿Reconstruir el índice completo? Tardará ~20 minutos.")) return;
@@ -683,6 +891,15 @@
           const dot = cards[1].querySelector(".dot");
           dot.className = "dot " + (d.facturas.listo ? "ok" : "no");
           dot.textContent = d.facturas.listo ? "Listo" : "Cargando";
+        }
+      }
+      if (d.otros !== undefined) {
+        const cards = document.querySelectorAll(".status-card");
+        if (cards[2]) {
+          cards[2].querySelector(".count").textContent = d.otros.pdfs;
+          const dot = cards[2].querySelector(".dot");
+          dot.className = "dot " + (d.otros.listo ? "ok" : "no");
+          dot.textContent = d.otros.listo ? "Listo" : "Cargando";
         }
       }
     } catch (e) { /* silencioso */ }
