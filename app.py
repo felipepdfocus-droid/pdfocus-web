@@ -32,6 +32,7 @@ import string
 from datetime import datetime
 
 import gzip
+import zlib
 import base64
 import sys
 
@@ -251,27 +252,74 @@ def _ensure_cache_sheet():
         return False
 
 
+def _podar_carpetas_sin_uso():
+    """
+    Quita de la memoria (y por tanto del caché guardado) las carpetas que ya ningún
+    perfil usa, por ejemplo una carpeta que se reemplazó en "Carpetas". Si los
+    usuarios no se pudieron cargar, no toca nada.
+    """
+    try:
+        mapa = _mapa_carpetas()
+    except Exception:
+        return
+    if not mapa:
+        return
+    with _INDEX_LOCK:
+        sobran = [k for k in _INDEX_CACHE if k not in mapa]
+        n = sum(len(_INDEX_CACHE[k]) for k in sobran)
+        for k in sobran:
+            _INDEX_CACHE.pop(k, None)
+            _INDEX_BUILT.pop(k, None)
+    if sobran:
+        print(f"[INDEX] Quitadas {len(sobran)} carpeta(s) sin uso ({n} PDFs) de la memoria.", flush=True)
+
+
+def _copia_indice():
+    """Copia liviana del índice (solo referencias) para guardarlo sin bloquear búsquedas."""
+    with _INDEX_LOCK:
+        return {k: dict(v) for k, v in _INDEX_CACHE.items()}
+
+
+def _json_indice_por_partes(data):
+    """
+    Genera el JSON del índice por pedazos, UN documento a la vez. Así guardar el
+    índice no necesita tener en memoria todo el texto descomprimido junto (ese pico
+    era el que dejaba al servidor sin memoria). El resultado es el mismo JSON de antes.
+    """
+    yield "{"
+    primera_carpeta = True
+    for sec_key, entries in data.items():
+        yield ("" if primera_carpeta else ",") + json.dumps(sec_key) + ":{"
+        primera_carpeta = False
+        primero = True
+        for fid, info in entries.items():
+            entry = dict(info)
+            if isinstance(entry.get("compact"), bytes):
+                entry["compact"] = _decompress_compact(entry["compact"])
+            yield ("" if primero else ",") + json.dumps(fid) + ":" + json.dumps(entry, ensure_ascii=False)
+            primero = False
+        yield "}"
+    yield "}"
+
+
 def _save_index_to_drive():
     """Guarda el índice comprimido en Google Sheets (chunks de base64)."""
     try:
-        with _INDEX_LOCK:
-            data = dict(_INDEX_CACHE)
+        _podar_carpetas_sin_uso()
+        data = _copia_indice()
         total = sum(len(v) for v in data.values())
         if total == 0:
             return
-        # Descomprimir compact (bytes) a string antes de serializar a JSON
-        serializable = {}
-        for sec_key, entries in data.items():
-            serializable[sec_key] = {}
-            for fid, info in entries.items():
-                entry = dict(info)
-                if isinstance(entry.get("compact"), bytes):
-                    entry["compact"] = _decompress_compact(entry["compact"])
-                serializable[sec_key][fid] = entry
-        # Comprimir con gzip y codificar en base64
-        json_bytes = json.dumps(serializable, ensure_ascii=False).encode("utf-8")
-        compressed = gzip.compress(json_bytes, compresslevel=9)
+        # Comprimir con gzip (formato idéntico al de antes) documento por documento
+        comp = zlib.compressobj(9, zlib.DEFLATED, 31)
+        partes = []
+        for pedazo in _json_indice_por_partes(data):
+            partes.append(comp.compress(pedazo.encode("utf-8")))
+        partes.append(comp.flush())
+        compressed = b"".join(partes)
+        del partes
         b64 = base64.b64encode(compressed).decode("ascii")
+        del compressed
         # Dividir en chunks
         chunks = [b64[i:i+CACHE_CHUNK_SIZE] for i in range(0, len(b64), CACHE_CHUNK_SIZE)]
         print(f"[SHEETS-CACHE] Guardando {total} PDFs en {len(chunks)} chunks ({len(b64)} chars)...", flush=True)
@@ -323,19 +371,8 @@ def _load_index_from_drive():
                     _INDEX_BUILT[sec_key] = True
             total = sum(len(v) for v in data.values())
             print(f"[SHEETS-CACHE] ✅ Índice cargado desde Sheets: {total} PDFs.", flush=True)
-            try:
-                # Guardar en disco con compact como string (para compatibilidad)
-                disk_data = {}
-                for sec_key, entries in data.items():
-                    disk_data[sec_key] = {}
-                    for fid, info in entries.items():
-                        disk_data[sec_key][fid] = dict(info)
-                        if isinstance(info.get("compact"), bytes):
-                            disk_data[sec_key][fid]["compact"] = _decompress_compact(info["compact"])
-                with open(INDEX_CACHE_PATH, "w", encoding="utf-8") as f:
-                    json.dump(disk_data, f, ensure_ascii=False)
-            except Exception:
-                pass
+            del data
+            _save_index_to_disk()   # copia local para reinicios rápidos (por partes)
             return True
         except Exception as e:
             print(f"[SHEETS-CACHE] ❌ Error intento {intento}/3: {e}", flush=True)
@@ -348,19 +385,13 @@ def _load_index_from_drive():
 
 def _save_index_to_disk():
     try:
-        with _INDEX_LOCK:
-            data = dict(_INDEX_CACHE)
-        # Descomprimir compact (bytes) a string antes de serializar
-        serializable = {}
-        for sec_key, entries in data.items():
-            serializable[sec_key] = {}
-            for fid, info in entries.items():
-                entry = dict(info)
-                if isinstance(entry.get("compact"), bytes):
-                    entry["compact"] = _decompress_compact(entry["compact"])
-                serializable[sec_key][fid] = entry
-        with open(INDEX_CACHE_PATH, "w", encoding="utf-8") as f:
-            json.dump(serializable, f, ensure_ascii=False)
+        _podar_carpetas_sin_uso()
+        data = _copia_indice()
+        tmp = INDEX_CACHE_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            for pedazo in _json_indice_por_partes(data):
+                f.write(pedazo)
+        os.replace(tmp, INDEX_CACHE_PATH)
         total = sum(len(v) for v in data.values())
         print(f"[CACHE-LOCAL] Copia local guardada: {total} PDFs.", flush=True)
     except Exception as e:
