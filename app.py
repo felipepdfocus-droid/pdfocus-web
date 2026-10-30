@@ -2,10 +2,22 @@
 PDFocus Web — Felipe Ceballos
 Busca referencias en PDFs almacenados en Google Drive y los devuelve marcados.
 Sistema de login por token + contraseña por empresa, almacenado en Google Sheets.
-Cache en Google Drive: el índice se guarda en Drive para sobrevivir deploys.
+Caché del índice en Google Sheets para sobrevivir reinicios y deploys.
+
+VERSIÓN MULTI-EMPRESA
+  Tipos de perfil:
+    EMPRESA   → solo ve los documentos de SUS carpetas (Manifiestos, Facturas, Otros).
+    UNIVERSAL → solo ve la carpeta de manifiestos compartidos (una sola para todos los
+                perfiles universales).
+    GENERAL   → ve los documentos de TODAS las empresas y de la universal.
+
+  Compatibilidad: una EMPRESA sin carpetas propias usa las carpetas de siempre
+  (FOLDER_MANIFIESTOS / FOLDER_FACTURAS). Así nada cambia hasta que se le asignen.
 
 Estructura Google Sheets (usuarios_pdfocus):
   A: empresa | B: token | C: activo (SI/NO) | D: fecha_creacion | E: password_hash
+  F: tipo (EMPRESA/UNIVERSAL/GENERAL) | G: carpeta manifiestos | H: carpeta facturas
+  I: carpeta otros documentos
 """
 
 import os
@@ -35,11 +47,28 @@ app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "pdfocus_secret_2026_xK9mN3pQ")
 
 # ── CONFIG ────────────────────────────────────────────────────
+# Carpetas "de siempre" (las que usa KINO hoy). Se siguen usando para las empresas
+# que todavía no tienen carpetas propias asignadas.
 FOLDER_ID_MANIFIESTOS = os.environ.get("FOLDER_MANIFIESTOS", "")
 FOLDER_ID_FACTURAS    = os.environ.get("FOLDER_FACTURAS", "")
+# Carpeta de Drive donde se crean automáticamente las carpetas de cada empresa.
+# Debe estar compartida con la cuenta de servicio como EDITOR.
+FOLDER_RAIZ_EMPRESAS  = os.environ.get("FOLDER_RAIZ_EMPRESAS", "")
 SERVICE_ACCOUNT_JSON  = os.environ.get("GOOGLE_SERVICE_ACCOUNT", "")
 ADMIN_TOKEN           = os.environ.get("ADMIN_TOKEN", "pdfocus_kino_2026")
 SHEETS_ID             = os.environ.get("SHEETS_ID", "1a-lIDPDbimXLVys0vS6keqls-fz4bCU1pq28qiZ2qJY")
+BASE_URL              = os.environ.get("BASE_URL", "https://pdfocus-web-1sbt.onrender.com")
+
+# Tipos de documento y modo de resaltado de cada uno
+TIPOS_DOC   = ("manifiestos", "facturas", "otros")
+MODO_DOC    = {"manifiestos": "manifesto", "facturas": "factura", "otros": "manifesto"}
+NOMBRE_DOC  = {"manifiestos": "Manifiestos", "facturas": "Facturas", "otros": "Otros documentos"}
+
+# Tipos de perfil
+PERFIL_EMPRESA   = "EMPRESA"
+PERFIL_UNIVERSAL = "UNIVERSAL"
+PERFIL_GENERAL   = "GENERAL"
+PERFILES = (PERFIL_EMPRESA, PERFIL_UNIVERSAL, PERFIL_GENERAL)
 
 # Nombre del archivo de caché en Google Drive (se mantiene como fallback)
 DRIVE_CACHE_FILENAME  = "pdfocus_index_cache.json"
@@ -52,11 +81,13 @@ CACHE_CHUNK_SIZE = 45000
 # Ruta temporal para el caché local
 INDEX_CACHE_PATH = "/tmp/pdfocus_index_cache.json"
 
-# Cache en memoria — el campo "compact" se guarda comprimido (gzip bytes)
-# para reducir uso de RAM ~75%. Se descomprime solo al buscar.
+# Caché en memoria. La clave es el ID de la CARPETA de Drive:
+#   _INDEX_CACHE[folder_id] = {file_id: {"name", "compact" (gzip bytes), "modified_time"}}
+# El campo "compact" se guarda comprimido para reducir uso de RAM ~75%.
 _INDEX_CACHE = {}
 _INDEX_LOCK  = threading.Lock()
-_INDEX_BUILT = {"manifiestos": False, "facturas": False}
+_INDEX_BUILT = {}          # folder_id -> True cuando ya está indexada
+_STARTUP_DONE = threading.Event()
 
 
 def _compress_compact(text: str) -> bytes:
@@ -66,7 +97,7 @@ def _compress_compact(text: str) -> bytes:
 def _decompress_compact(data: bytes) -> str:
     return gzip.decompress(data).decode("utf-8")
 
-# Cache de usuarios
+# Cache de usuarios (incluye activos e inactivos)
 _USERS_CACHE  = {}
 _USERS_LOCK   = threading.Lock()
 _USERS_LOADED = {"ts": 0}
@@ -164,7 +195,35 @@ def _url_encode(s):
     return quote(s, safe="!$&'()*+,;=:@/")
 
 
+
+def _drive_crear_carpeta(nombre, parent_id):
+    """Crea una carpeta en Drive dentro de parent_id y devuelve su ID."""
+    token = _get_token()
+    r = _requests.post(
+        "https://www.googleapis.com/drive/v3/files",
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        params={"supportsAllDrives": "true", "fields": "id"},
+        json={"name": nombre, "mimeType": "application/vnd.google-apps.folder", "parents": [parent_id]},
+    )
+    r.raise_for_status()
+    return r.json()["id"]
+
+
 # ── CACHÉ EN GOOGLE SHEETS ────────────────────────────────────
+def _migrar_claves_cache(data):
+    """
+    El caché de la versión anterior usaba las claves "manifiestos"/"facturas".
+    Ahora la clave es el ID de la carpeta. Se convierten sin reindexar nada.
+    """
+    if "manifiestos" in data and FOLDER_ID_MANIFIESTOS:
+        data.setdefault(FOLDER_ID_MANIFIESTOS, {}).update(data.pop("manifiestos"))
+    if "facturas" in data and FOLDER_ID_FACTURAS:
+        data.setdefault(FOLDER_ID_FACTURAS, {}).update(data.pop("facturas"))
+    data.pop("manifiestos", None)
+    data.pop("facturas", None)
+    return data
+
+
 def _ensure_cache_sheet():
     """Crea la hoja pdfocus_cache si no existe."""
     try:
@@ -243,12 +302,12 @@ def _load_index_from_drive():
                 for fid, info in entries.items():
                     if isinstance(info.get("compact"), str):
                         info["compact"] = _compress_compact(info["compact"])
+            data = _migrar_claves_cache(data)
             with _INDEX_LOCK:
                 _INDEX_CACHE.clear()
                 _INDEX_CACHE.update(data)
-                for sec_key in ("manifiestos", "facturas"):
-                    if sec_key in data and len(data[sec_key]) > 0:
-                        _INDEX_BUILT[sec_key] = True
+                for sec_key in data:
+                    _INDEX_BUILT[sec_key] = True
             total = sum(len(v) for v in data.values())
             print(f"[SHEETS-CACHE] ✅ Índice cargado desde Sheets: {total} PDFs.", flush=True)
             try:
@@ -308,12 +367,12 @@ def _load_index_from_disk():
             for fid, info in entries.items():
                 if isinstance(info.get("compact"), str):
                     info["compact"] = _compress_compact(info["compact"])
+        data = _migrar_claves_cache(data)
         with _INDEX_LOCK:
             _INDEX_CACHE.clear()
             _INDEX_CACHE.update(data)
-            for sec_key in ("manifiestos", "facturas"):
-                if sec_key in data and len(data[sec_key]) > 0:
-                    _INDEX_BUILT[sec_key] = True
+            for sec_key in data:
+                _INDEX_BUILT[sec_key] = True
         total = sum(len(v) for v in data.values())
         print(f"[CACHE-LOCAL] Índice cargado desde /tmp: {total} PDFs.", flush=True)
         return True
@@ -322,29 +381,42 @@ def _load_index_from_disk():
         return False
 
 
+
 # ── GOOGLE SHEETS — USUARIOS ──────────────────────────────────
-# Columnas: A=empresa, B=token, C=activo, D=fecha_creacion, E=password_hash
+# Columnas: A=empresa, B=token, C=activo, D=fecha_creacion, E=password_hash,
+#           F=tipo, G=carpeta manifiestos, H=carpeta facturas, I=carpeta otros
+
+def _celda(row, i):
+    return row[i].strip() if len(row) > i and row[i] else ""
+
 
 def _load_users_from_sheets():
     try:
-        result = _sheets_get("usuarios_pdfocus!A2:E1000")
+        result = _sheets_get("usuarios_pdfocus!A2:I1000")
         rows = result.get("values", [])
         users = {}
         for row in rows:
             if len(row) < 3:
                 continue
-            empresa       = row[0].strip() if row[0] else ""
-            token         = row[1].strip() if row[1] else ""
-            activo        = row[2].strip().upper() if row[2] else "NO"
-            fecha         = row[3].strip() if len(row) > 3 else ""
-            password_hash = row[4].strip() if len(row) > 4 else ""
-            if token and activo == "SI":
-                users[token] = {
-                    "empresa": empresa,
-                    "activo": True,
-                    "fecha_creacion": fecha,
-                    "password_hash": password_hash,
-                }
+            empresa = _celda(row, 0)
+            token   = _celda(row, 1)
+            if not token:
+                continue
+            tipo = _celda(row, 5).upper() or PERFIL_EMPRESA
+            if tipo not in PERFILES:
+                tipo = PERFIL_EMPRESA
+            users[token] = {
+                "empresa": empresa,
+                "activo": _celda(row, 2).upper() == "SI",
+                "fecha_creacion": _celda(row, 3),
+                "password_hash": _celda(row, 4),
+                "tipo": tipo,
+                "carpetas": {
+                    "manifiestos": _celda(row, 6),
+                    "facturas":    _celda(row, 7),
+                    "otros":       _celda(row, 8),
+                },
+            }
         return users
     except Exception as e:
         print(f"[SHEETS] Error cargando usuarios: {e}", flush=True)
@@ -354,7 +426,7 @@ def _load_users_from_sheets():
 _USERS_LOADING = threading.Event()  # evita cargas simultáneas
 
 def _reload_users_sync():
-    """Carga usuarios desde Sheets de forma síncrona. Solo llamar desde threads de background."""
+    """Carga usuarios desde Sheets de forma síncrona."""
     users = _load_users_from_sheets()
     with _USERS_LOCK:
         _USERS_CACHE.clear()
@@ -370,14 +442,12 @@ def _get_users(force_reload=False):
         current = dict(_USERS_CACHE)
         cache_empty = not current
 
-    # Si el caché está vacío y hay una carga en progreso (startup), esperar hasta 8s
     if cache_empty and _USERS_LOADING.is_set():
         _USERS_LOADING.wait(timeout=8)
         with _USERS_LOCK:
             current = dict(_USERS_CACHE)
 
     if needs_reload and not _USERS_LOADING.is_set() and not cache_empty:
-        # Recarga periódica en background (caché ya tiene datos)
         def _do_reload():
             if _USERS_LOADING.is_set():
                 return
@@ -391,10 +461,38 @@ def _get_users(force_reload=False):
     return current
 
 
-def _add_user_to_sheets(empresa, token):
+def _users_snapshot():
+    """Usuarios en memoria; si está vacío, los carga directo."""
+    if _USERS_LOADING.is_set():
+        _USERS_LOADING.wait(timeout=5)
+    with _USERS_LOCK:
+        users = dict(_USERS_CACHE)
+    if not users:
+        try:
+            _reload_users_sync()
+            with _USERS_LOCK:
+                users = dict(_USERS_CACHE)
+        except Exception as e:
+            print(f"[USERS] Error cargando usuarios directo: {e}", flush=True)
+    return users
+
+
+def _fila_de_token(token):
+    result = _sheets_get("usuarios_pdfocus!B2:B1000")
+    for i, row in enumerate(result.get("values", [])):
+        if row and row[0].strip() == token:
+            return i + 2
+    return None
+
+
+def _add_user_to_sheets(empresa, token, tipo=PERFIL_EMPRESA, carpetas=None):
     fecha = datetime.now().strftime("%Y-%m-%d %H:%M")
+    c = carpetas or {}
     try:
-        _sheets_append("usuarios_pdfocus!A:E", [[empresa, token, "SI", fecha, ""]])
+        _sheets_append("usuarios_pdfocus!A:I", [[
+            empresa, token, "SI", fecha, "", tipo,
+            c.get("manifiestos", ""), c.get("facturas", ""), c.get("otros", ""),
+        ]])
         _reload_users_sync()
         return True
     except Exception as e:
@@ -402,19 +500,30 @@ def _add_user_to_sheets(empresa, token):
         return False
 
 
+def _set_user_carpetas(token, carpetas):
+    try:
+        fila = _fila_de_token(token)
+        if not fila:
+            return False
+        _sheets_update(f"usuarios_pdfocus!G{fila}:I{fila}", [[
+            carpetas.get("manifiestos", ""), carpetas.get("facturas", ""), carpetas.get("otros", ""),
+        ]])
+        _reload_users_sync()
+        return True
+    except Exception as e:
+        print(f"[SHEETS] Error guardando carpetas: {e}", flush=True)
+        return False
+
+
 def _set_user_password(token, new_password):
     """Establece o cambia la contraseña de una empresa. Guarda el hash en columna E."""
     try:
-        result = _sheets_get("usuarios_pdfocus!B2:B1000")
-        rows = result.get("values", [])
-        for i, row in enumerate(rows):
-            if row and row[0].strip() == token:
-                row_num = i + 2
-                hashed = generate_password_hash(new_password)
-                _sheets_update(f"usuarios_pdfocus!E{row_num}", [[hashed]])
-                _reload_users_sync()
-                return True
-        return False
+        fila = _fila_de_token(token)
+        if not fila:
+            return False
+        _sheets_update(f"usuarios_pdfocus!E{fila}", [[generate_password_hash(new_password)]])
+        _reload_users_sync()
+        return True
     except Exception as e:
         print(f"[SHEETS] Error cambiando contraseña: {e}", flush=True)
         return False
@@ -422,16 +531,12 @@ def _set_user_password(token, new_password):
 
 def _set_user_status(token, activo):
     try:
-        result = _sheets_get("usuarios_pdfocus!B2:B1000")
-        rows = result.get("values", [])
-        for i, row in enumerate(rows):
-            if row and row[0].strip() == token:
-                row_num = i + 2
-                nuevo_estado = "SI" if activo else "NO"
-                _sheets_update(f"usuarios_pdfocus!C{row_num}", [[nuevo_estado]])
-                _reload_users_sync()
-                return True
-        return False
+        fila = _fila_de_token(token)
+        if not fila:
+            return False
+        _sheets_update(f"usuarios_pdfocus!C{fila}", [["SI" if activo else "NO"]])
+        _reload_users_sync()
+        return True
     except Exception as e:
         print(f"[SHEETS] Error cambiando estado: {e}", flush=True)
         return False
@@ -439,29 +544,43 @@ def _set_user_status(token, activo):
 
 def _delete_user_from_sheets(token):
     try:
-        result = _sheets_get("usuarios_pdfocus!B2:B1000")
-        rows = result.get("values", [])
-        for i, row in enumerate(rows):
-            if row and row[0].strip() == token:
-                row_num = i + 2
-                meta = _sheets_get_meta()
-                sheet_id = meta["sheets"][0]["properties"]["sheetId"]
-                _sheets_batch_update({"requests": [{
-                    "deleteDimension": {
-                        "range": {
-                            "sheetId": sheet_id,
-                            "dimension": "ROWS",
-                            "startIndex": row_num - 1,
-                            "endIndex": row_num,
-                        }
-                    }
-                }]})
-                _reload_users_sync()
-                return True
-        return False
+        row_num = _fila_de_token(token)
+        if not row_num:
+            return False
+        meta = _sheets_get_meta()
+        sheet_id = None
+        for sh in meta.get("sheets", []):
+            if sh["properties"]["title"] == "usuarios_pdfocus":
+                sheet_id = sh["properties"]["sheetId"]
+        if sheet_id is None:
+            sheet_id = meta["sheets"][0]["properties"]["sheetId"]
+        _sheets_batch_update({"requests": [{
+            "deleteDimension": {
+                "range": {
+                    "sheetId": sheet_id,
+                    "dimension": "ROWS",
+                    "startIndex": row_num - 1,
+                    "endIndex": row_num,
+                }
+            }
+        }]})
+        _reload_users_sync()
+        return True
     except Exception as e:
         print(f"[SHEETS] Error eliminando usuario: {e}", flush=True)
         return False
+
+
+def _asegurar_encabezados_usuarios():
+    """Escribe los títulos de las columnas nuevas (F:I) si faltan. No toca datos."""
+    try:
+        r = _sheets_get("usuarios_pdfocus!F1:I1")
+        if not r.get("values"):
+            _sheets_update("usuarios_pdfocus!F1:I1", [[
+                "tipo", "carpeta_manifiestos", "carpeta_facturas", "carpeta_otros"
+            ]])
+    except Exception as e:
+        print(f"[SHEETS] No se pudieron escribir encabezados: {e}", flush=True)
 
 
 def _generate_token(length=10):
@@ -474,13 +593,11 @@ def _validate_token(token):
     if not token:
         return None
     users = _get_users()
-    # Si caché vacío, esperar máx 5s a que el background loader termine
     if not users:
         if _USERS_LOADING.is_set():
             _USERS_LOADING.wait(timeout=5)
         with _USERS_LOCK:
             users = dict(_USERS_CACHE)
-    # Fallback síncrono si sigue vacío
     if not users:
         try:
             users = _load_users_from_sheets()
@@ -499,6 +616,110 @@ def _validate_token(token):
 def _is_authenticated(token):
     """Verifica si el token está autenticado en la sesión Flask actual."""
     return session.get("auth_token") == token
+
+
+# ── CARPETAS POR PERFIL ───────────────────────────────────────
+def _carpetas_legado():
+    c = {}
+    if FOLDER_ID_MANIFIESTOS:
+        c["manifiestos"] = [FOLDER_ID_MANIFIESTOS]
+    if FOLDER_ID_FACTURAS:
+        c["facturas"] = [FOLDER_ID_FACTURAS]
+    return c
+
+
+def _usa_legado(u):
+    return u.get("tipo") == PERFIL_EMPRESA and not any(u.get("carpetas", {}).values())
+
+
+def _carpetas_propias(u):
+    """Carpetas de un perfil EMPRESA o UNIVERSAL: {tipo_doc: [folder_id]}."""
+    if u.get("tipo") == PERFIL_GENERAL:
+        return {}
+    if _usa_legado(u):
+        return _carpetas_legado()
+    c = u.get("carpetas", {})
+    tipos = ("manifiestos",) if u.get("tipo") == PERFIL_UNIVERSAL else TIPOS_DOC
+    return {t: [c[t]] for t in tipos if c.get(t)}
+
+
+def _mapa_carpetas(users=None):
+    """
+    Todas las carpetas que se indexan: {folder_id: {"tipo": tipo_doc, "duenos": set(nombres)}}.
+    Incluye las de empresas inactivas (sus documentos siguen siendo visibles para GENERAL).
+    """
+    users = users if users is not None else _users_snapshot()
+    mapa = {}
+    for u in users.values():
+        for t, fids in _carpetas_propias(u).items():
+            for fid in fids:
+                m = mapa.setdefault(fid, {"tipo": t, "duenos": set()})
+                m["duenos"].add("UNIVERSAL" if u.get("tipo") == PERFIL_UNIVERSAL else u.get("empresa", ""))
+    return mapa
+
+
+def _carpetas_de_usuario(u, users=None):
+    """{tipo_doc: [folder_id, ...]} que puede consultar este perfil."""
+    if u.get("tipo") == PERFIL_GENERAL:
+        out = {}
+        for fid, m in _mapa_carpetas(users).items():
+            out.setdefault(m["tipo"], []).append(fid)
+        return out
+    return _carpetas_propias(u)
+
+
+def _tipos_de_usuario(u):
+    if u.get("tipo") == PERFIL_UNIVERSAL:
+        return ["manifiestos"]
+    return list(TIPOS_DOC)
+
+
+def _carpeta_universal(users=None):
+    users = users if users is not None else _users_snapshot()
+    for u in users.values():
+        if u.get("tipo") == PERFIL_UNIVERSAL and u.get("carpetas", {}).get("manifiestos"):
+            return u["carpetas"]["manifiestos"]
+    return ""
+
+
+def _id_de_link(texto):
+    """Acepta un link de carpeta de Drive o el ID directamente."""
+    texto = (texto or "").strip()
+    if not texto:
+        return ""
+    m = re.search(r"/folders/([A-Za-z0-9_-]+)", texto) or re.search(r"[?&]id=([A-Za-z0-9_-]+)", texto)
+    if m:
+        return m.group(1)
+    if re.fullmatch(r"[A-Za-z0-9_-]{10,}", texto):
+        return texto
+    raise ValueError(f"No reconozco este link o ID de carpeta: {texto[:60]}")
+
+
+def _crear_carpetas(empresa, tipo, existentes=None):
+    """
+    Crea en Drive las carpetas que falten para el perfil.
+    EMPRESA   → <raíz>/<EMPRESA>/{Manifiestos, Facturas, Otros documentos}
+    UNIVERSAL → reutiliza la carpeta universal si ya existe; si no, <raíz>/UNIVERSAL - Manifiestos
+    """
+    existentes = dict(existentes or {})
+    if tipo == PERFIL_GENERAL:
+        return {}
+    if tipo == PERFIL_UNIVERSAL:
+        if not existentes.get("manifiestos"):
+            existentes["manifiestos"] = _carpeta_universal()
+        if not existentes.get("manifiestos"):
+            if not FOLDER_RAIZ_EMPRESAS:
+                raise ValueError("Falta configurar FOLDER_RAIZ_EMPRESAS en Render.")
+            existentes["manifiestos"] = _drive_crear_carpeta("UNIVERSAL - Manifiestos", FOLDER_RAIZ_EMPRESAS)
+        return {"manifiestos": existentes["manifiestos"], "facturas": "", "otros": ""}
+    faltan = [t for t in TIPOS_DOC if not existentes.get(t)]
+    if faltan:
+        if not FOLDER_RAIZ_EMPRESAS:
+            raise ValueError("Falta configurar FOLDER_RAIZ_EMPRESAS en Render.")
+        padre = _drive_crear_carpeta(empresa, FOLDER_RAIZ_EMPRESAS)
+        for t in faltan:
+            existentes[t] = _drive_crear_carpeta(NOMBRE_DOC[t], padre)
+    return {t: existentes.get(t, "") for t in TIPOS_DOC}
 
 
 # ── GOOGLE DRIVE — PDFs ───────────────────────────────────────
@@ -556,6 +777,7 @@ def list_pdfs_in_folder(folder_id, include_modified_time=False):
 
 def download_pdf_bytes(file_id):
     return _drive_get_media(file_id)
+
 
 
 # ── NORMALIZACIÓN ─────────────────────────────────────────────
@@ -666,120 +888,6 @@ def _fecha_clave(nombre):
     if m:
         return (int(m.group(1)), 0, 0)
     return (0, 0, 0)
-
-
-# ── ÍNDICE ────────────────────────────────────────────────────
-def build_compact_from_bytes(pdf_bytes):
-    try:
-        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    except Exception:
-        return ""
-    tokens = []
-    for p in range(len(doc)):
-        try:
-            for w in doc.load_page(p).get_text("words"):
-                tok = normalize_text(w[4]).replace(" ", "")
-                if tok:
-                    tokens.append(tok)
-        except Exception:
-            pass
-    doc.close()
-    return _SEP.join(tokens)
-
-
-def build_index(folder_id, section_key):
-    with _INDEX_LOCK:
-        if _INDEX_BUILT.get(section_key):
-            return
-    print(f"[INDEX] Construyendo índice para {section_key}...", flush=True)
-    pdfs = list_pdfs_in_folder(folder_id, include_modified_time=True)
-    print(f"[INDEX] {section_key}: {len(pdfs)} PDFs encontrados.", flush=True)
-    new_entries = {}
-    for i, f in enumerate(pdfs):
-        try:
-            data = download_pdf_bytes(f["id"])
-            compact = build_compact_from_bytes(data)
-            new_entries[f["id"]] = {
-                "name": f["name"],
-                "compact": _compress_compact(compact),
-                "modified_time": f.get("modifiedTime", ""),
-            }
-            print(f"  ✔ Indexado: {f['name']}", flush=True)
-        except Exception as e:
-            print(f"  ✖ Error indexando {f['name']}: {e}", flush=True)
-        # Guardar progreso parcial en Sheets cada 50 PDFs
-        if (i + 1) % 50 == 0:
-            with _INDEX_LOCK:
-                _INDEX_CACHE[section_key] = dict(new_entries)
-            print(f"[INDEX] Guardando progreso parcial: {i+1}/{len(pdfs)}...", flush=True)
-            _save_index_to_disk()
-            _save_index_to_drive()
-    with _INDEX_LOCK:
-        _INDEX_CACHE[section_key] = new_entries
-        _INDEX_BUILT[section_key] = True
-    print(f"[INDEX] {section_key}: {len(new_entries)} PDFs indexados. LISTO.", flush=True)
-    _save_index_to_disk()
-    _save_index_to_drive()
-
-
-def update_index_incremental(folder_id, section_key):
-    print(f"[UPDATE] Revisando cambios en {section_key}...", flush=True)
-    try:
-        pdfs = list_pdfs_in_folder(folder_id, include_modified_time=True)
-    except Exception as e:
-        print(f"[UPDATE] Error listando {section_key}: {e}", flush=True)
-        return
-
-    with _INDEX_LOCK:
-        current = dict(_INDEX_CACHE.get(section_key, {}))
-
-    drive_ids = {f["id"] for f in pdfs}
-    removed = [fid for fid in current if fid not in drive_ids]
-    for fid in removed:
-        print(f"  ✖ Eliminado del índice: {current[fid]['name']}", flush=True)
-        del current[fid]
-
-    nuevos = 0
-    for f in pdfs:
-        fid = f["id"]
-        mod = f.get("modifiedTime", "")
-        if fid in current and current[fid].get("modified_time") == mod:
-            continue
-        try:
-            data = download_pdf_bytes(fid)
-            compact = build_compact_from_bytes(data)
-            current[fid] = {
-                "name": f["name"],
-                "compact": _compress_compact(compact),
-                "modified_time": mod,
-            }
-            print(f"  ✔ Actualizado: {f['name']}", flush=True)
-            nuevos += 1
-            # Guardar progreso en Sheets cada 50 PDFs nuevos
-            if nuevos % 50 == 0:
-                with _INDEX_LOCK:
-                    _INDEX_CACHE[section_key] = dict(current)
-                    _INDEX_BUILT[section_key] = True
-                print(f"[UPDATE] Guardando progreso parcial: {nuevos} nuevos...", flush=True)
-                _save_index_to_disk()
-                _save_index_to_drive()
-        except Exception as e:
-            print(f"  ✖ Error actualizando {f['name']}: {e}", flush=True)
-
-    with _INDEX_LOCK:
-        _INDEX_CACHE[section_key] = current
-        _INDEX_BUILT[section_key] = True
-
-    if nuevos > 0 or removed:
-        _save_index_to_disk()
-        _save_index_to_drive()
-
-    print(f"[UPDATE] {section_key}: {nuevos} nuevos/modificados, {len(removed)} eliminados. Total: {len(current)}.", flush=True)
-
-
-def ensure_index(section_key, folder_id):
-    if not _INDEX_BUILT.get(section_key):
-        build_index(folder_id, section_key)
 
 
 # ── BÚSQUEDA Y ANOTACIÓN ──────────────────────────────────────
@@ -924,6 +1032,153 @@ def annotate_pdf_bytes(pdf_bytes, ref_raw, mode="manifesto"):
     return out.read(), found
 
 
+# ── ÍNDICE (por carpeta de Drive) ─────────────────────────────
+# build_index / update_index_incremental reciben (folder_id, clave); la clave del
+# índice ES el folder_id, así cada carpeta se indexa una sola vez aunque la usen
+# varios perfiles.
+def build_compact_from_bytes(pdf_bytes):
+    try:
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    except Exception:
+        return ""
+    tokens = []
+    for p in range(len(doc)):
+        try:
+            for w in doc.load_page(p).get_text("words"):
+                tok = normalize_text(w[4]).replace(" ", "")
+                if tok:
+                    tokens.append(tok)
+        except Exception:
+            pass
+    doc.close()
+    return _SEP.join(tokens)
+
+
+def build_index(folder_id, section_key):
+    with _INDEX_LOCK:
+        if _INDEX_BUILT.get(section_key):
+            return
+    print(f"[INDEX] Construyendo índice para {section_key}...", flush=True)
+    pdfs = list_pdfs_in_folder(folder_id, include_modified_time=True)
+    print(f"[INDEX] {section_key}: {len(pdfs)} PDFs encontrados.", flush=True)
+    new_entries = {}
+    for i, f in enumerate(pdfs):
+        try:
+            data = download_pdf_bytes(f["id"])
+            compact = build_compact_from_bytes(data)
+            new_entries[f["id"]] = {
+                "name": f["name"],
+                "compact": _compress_compact(compact),
+                "modified_time": f.get("modifiedTime", ""),
+            }
+            print(f"  ✔ Indexado: {f['name']}", flush=True)
+        except Exception as e:
+            print(f"  ✖ Error indexando {f['name']}: {e}", flush=True)
+        # Guardar progreso parcial en Sheets cada 50 PDFs
+        if (i + 1) % 50 == 0:
+            with _INDEX_LOCK:
+                _INDEX_CACHE[section_key] = dict(new_entries)
+            print(f"[INDEX] Guardando progreso parcial: {i+1}/{len(pdfs)}...", flush=True)
+            _save_index_to_disk()
+            _save_index_to_drive()
+    with _INDEX_LOCK:
+        _INDEX_CACHE[section_key] = new_entries
+        _INDEX_BUILT[section_key] = True
+    print(f"[INDEX] {section_key}: {len(new_entries)} PDFs indexados. LISTO.", flush=True)
+    _save_index_to_disk()
+    _save_index_to_drive()
+
+
+def update_index_incremental(folder_id, section_key):
+    print(f"[UPDATE] Revisando cambios en {section_key}...", flush=True)
+    try:
+        pdfs = list_pdfs_in_folder(folder_id, include_modified_time=True)
+    except Exception as e:
+        print(f"[UPDATE] Error listando {section_key}: {e}", flush=True)
+        return
+
+    with _INDEX_LOCK:
+        current = dict(_INDEX_CACHE.get(section_key, {}))
+
+    drive_ids = {f["id"] for f in pdfs}
+    removed = [fid for fid in current if fid not in drive_ids]
+    for fid in removed:
+        print(f"  ✖ Eliminado del índice: {current[fid]['name']}", flush=True)
+        del current[fid]
+
+    nuevos = 0
+    for f in pdfs:
+        fid = f["id"]
+        mod = f.get("modifiedTime", "")
+        if fid in current and current[fid].get("modified_time") == mod:
+            continue
+        try:
+            data = download_pdf_bytes(fid)
+            compact = build_compact_from_bytes(data)
+            current[fid] = {
+                "name": f["name"],
+                "compact": _compress_compact(compact),
+                "modified_time": mod,
+            }
+            print(f"  ✔ Actualizado: {f['name']}", flush=True)
+            nuevos += 1
+            # Guardar progreso en Sheets cada 50 PDFs nuevos
+            if nuevos % 50 == 0:
+                with _INDEX_LOCK:
+                    _INDEX_CACHE[section_key] = dict(current)
+                    _INDEX_BUILT[section_key] = True
+                print(f"[UPDATE] Guardando progreso parcial: {nuevos} nuevos...", flush=True)
+                _save_index_to_disk()
+                _save_index_to_drive()
+        except Exception as e:
+            print(f"  ✖ Error actualizando {f['name']}: {e}", flush=True)
+
+    with _INDEX_LOCK:
+        _INDEX_CACHE[section_key] = current
+        _INDEX_BUILT[section_key] = True
+
+    if nuevos > 0 or removed:
+        _save_index_to_disk()
+        _save_index_to_drive()
+
+    print(f"[UPDATE] {section_key}: {nuevos} nuevos/modificados, {len(removed)} eliminados. Total: {len(current)}.", flush=True)
+
+
+def ensure_index(section_key, folder_id):
+    if not _INDEX_BUILT.get(section_key):
+        build_index(folder_id, section_key)
+
+
+
+def _indexar_carpetas_en_background(fids, reconstruir=False):
+    def _run():
+        for fid in fids:
+            try:
+                if reconstruir:
+                    with _INDEX_LOCK:
+                        _INDEX_BUILT.pop(fid, None)
+                        _INDEX_CACHE.pop(fid, None)
+                    build_index(fid, fid)
+                else:
+                    update_index_incremental(fid, fid)
+            except Exception as e:
+                print(f"[INDEX] Error indexando carpeta {fid}: {e}", flush=True)
+    threading.Thread(target=_run, daemon=True).start()
+
+
+def _resumen_indice(mapa=None):
+    """Totales por tipo de documento para el panel admin."""
+    mapa = mapa if mapa is not None else _mapa_carpetas()
+    info = {t: {"listo": True, "pdfs": 0} for t in TIPOS_DOC}
+    with _INDEX_LOCK:
+        for fid, m in mapa.items():
+            t = m["tipo"]
+            info[t]["pdfs"] += len(_INDEX_CACHE.get(fid, {}))
+            if not _INDEX_BUILT.get(fid):
+                info[t]["listo"] = False
+    return info
+
+
 # ── DECORADOR DE AUTENTICACIÓN ────────────────────────────────
 def require_token(f):
     """Decorador: requiere token válido + contraseña verificada en sesión."""
@@ -935,15 +1190,13 @@ def require_token(f):
         if not user_info:
             return redirect(url_for("login_page"))
 
-        # Si tiene contraseña configurada, verificar que esté autenticado en sesión
         if user_info.get("password_hash"):
             if not _is_authenticated(token):
-                # Guardar token en sesión para el login de contraseña
                 session["pending_token"] = token
                 return redirect(url_for("password_page"))
 
         empresa = user_info["empresa"]
-        return f(*args, empresa=empresa, token=token, **kwargs)
+        return f(*args, empresa=empresa, token=token, user=user_info, **kwargs)
     return decorated
 
 
@@ -1016,30 +1269,26 @@ def acceso():
 
 @app.route("/status")
 def status():
-    with _INDEX_LOCK:
-        info = {
-            sec: {
-                "listo": _INDEX_BUILT.get(sec, False),
-                "pdfs": len(_INDEX_CACHE.get(sec, {})),
-            }
-            for sec in ("manifiestos", "facturas")
-        }
-    return jsonify(info)
+    return jsonify(_resumen_indice())
 
 
 # ── RUTAS PROTEGIDAS ──────────────────────────────────────────
 @app.route("/")
 @require_token
-def index(empresa=None, token=None):
-    resp = make_response(render_template("index.html", empresa=empresa, token=token))
+def index(empresa=None, token=None, user=None):
+    tipos = _tipos_de_usuario(user)
+    resp = make_response(render_template(
+        "index.html", empresa=empresa, token=token,
+        perfil=user.get("tipo", PERFIL_EMPRESA), tipos=tipos,
+    ))
     resp.set_cookie("pdfocus_token", token, max_age=60 * 60 * 24 * 30)
     return resp
 
 
 @app.route("/buscar", methods=["POST"])
 @require_token
-def buscar(empresa=None, token=None):
-    data   = request.get_json()
+def buscar(empresa=None, token=None, user=None):
+    data   = request.get_json() or {}
     codigo = (data.get("codigo") or "").strip()
     tipo   = (data.get("tipo") or "ambos").lower()
 
@@ -1048,26 +1297,37 @@ def buscar(empresa=None, token=None):
 
     ref_norm = normalize_compact(codigo)
     resultados = []
+    vistos = set()
 
-    secciones = []
-    if tipo in ("ambos", "manifiestos") and FOLDER_ID_MANIFIESTOS:
-        secciones.append(("manifiestos", FOLDER_ID_MANIFIESTOS, "manifesto"))
-    if tipo in ("ambos", "facturas") and FOLDER_ID_FACTURAS:
-        secciones.append(("facturas", FOLDER_ID_FACTURAS, "factura"))
+    users = _users_snapshot()
+    carpetas = _carpetas_de_usuario(user, users)
+    es_general = user.get("tipo") == PERFIL_GENERAL
+    duenos = {fid: m["duenos"] for fid, m in _mapa_carpetas(users).items()} if es_general else {}
 
-    for sec_key, folder_id, mode in secciones:
-        ensure_index(sec_key, folder_id)
-        index_data = _INDEX_CACHE.get(sec_key, {})
-        for file_id, info in index_data.items():
-            compact = info["compact"]
-            if isinstance(compact, bytes):
-                compact = _decompress_compact(compact)
-            if ref_in_text_safe(ref_norm, compact):
-                resultados.append({
-                    "nombre":   info["name"],
-                    "tipo":     mode,
-                    "drive_id": file_id,
-                })
+    permitidos = _tipos_de_usuario(user)
+    tipos = permitidos if tipo in ("ambos", "todos") else [t for t in permitidos if t == tipo]
+
+    for t in tipos:
+        for folder_id in carpetas.get(t, []):
+            ensure_index(folder_id, folder_id)
+            with _INDEX_LOCK:
+                index_data = dict(_INDEX_CACHE.get(folder_id, {}))
+            for file_id, info in index_data.items():
+                if file_id in vistos:
+                    continue
+                compact = info["compact"]
+                if isinstance(compact, bytes):
+                    compact = _decompress_compact(compact)
+                if ref_in_text_safe(ref_norm, compact):
+                    vistos.add(file_id)
+                    item = {
+                        "nombre":   info["name"],
+                        "tipo":     "otros" if t == "otros" else MODO_DOC[t],
+                        "drive_id": file_id,
+                    }
+                    if es_general:
+                        item["empresa"] = " / ".join(sorted(duenos.get(folder_id, []))) or ""
+                    resultados.append(item)
 
     if not resultados:
         return jsonify({"resultados": [], "mensaje": "No se encontró la referencia en ningún PDF."})
@@ -1076,15 +1336,29 @@ def buscar(empresa=None, token=None):
     return jsonify({"resultados": resultados})
 
 
+def _carpeta_del_archivo(user, drive_id):
+    """Devuelve (folder_id, tipo_doc) si el archivo está en una carpeta permitida; si no, None."""
+    for t, fids in _carpetas_de_usuario(user).items():
+        for fid in fids:
+            with _INDEX_LOCK:
+                if drive_id in _INDEX_CACHE.get(fid, {}):
+                    return fid, t
+    return None
+
+
 @app.route("/ver_pdf")
 @require_token
-def ver_pdf(empresa=None, token=None):
+def ver_pdf(empresa=None, token=None, user=None):
     drive_id = request.args.get("drive_id", "")
     codigo   = request.args.get("codigo", "").strip()
-    tipo     = request.args.get("tipo", "manifesto").lower()
 
     if not drive_id or not codigo:
         return "Parámetros faltantes.", 400
+
+    ubicacion = _carpeta_del_archivo(user, drive_id)
+    if not ubicacion:
+        return "No tienes acceso a este documento.", 403
+    _fid, tipo_doc = ubicacion
 
     try:
         pdf_bytes = download_pdf_bytes(drive_id)
@@ -1092,9 +1366,8 @@ def ver_pdf(empresa=None, token=None):
         return f"No se pudo descargar el PDF: {e}", 500
 
     try:
-        mode = "manifesto" if "manifest" in tipo or tipo == "manifesto" else "factura"
-        marked_bytes, found = annotate_pdf_bytes(pdf_bytes, codigo, mode=mode)
-    except Exception as e:
+        marked_bytes, found = annotate_pdf_bytes(pdf_bytes, codigo, mode=MODO_DOC[tipo_doc])
+    except Exception:
         marked_bytes = pdf_bytes
 
     return send_file(
@@ -1115,46 +1388,34 @@ def _check_admin():
 def admin_panel():
     if not _check_admin():
         return render_template("admin_login.html")
-    # Esperar máx 5s si hay carga en progreso
-    if _USERS_LOADING.is_set():
-        _USERS_LOADING.wait(timeout=5)
-    with _USERS_LOCK:
-        users = dict(_USERS_CACHE)
-    # Si el caché sigue vacío, cargar directamente (fallback síncrono)
-    if not users:
-        try:
-            users = _load_users_from_sheets()
-            with _USERS_LOCK:
-                _USERS_CACHE.clear()
-                _USERS_CACHE.update(users)
-                _USERS_LOADED["ts"] = time.time()
-        except Exception as e:
-            print(f"[ADMIN] Error cargando usuarios directo: {e}", flush=True)
+    users = _users_snapshot()
+    mapa = _mapa_carpetas(users)
+    index_info = _resumen_indice(mapa)
+
+    # Datos por empresa para la tabla
+    filas = {}
     with _INDEX_LOCK:
-        index_info = {
-            sec: {
-                "listo": _INDEX_BUILT.get(sec, False),
-                "pdfs": len(_INDEX_CACHE.get(sec, {})),
-            }
-            for sec in ("manifiestos", "facturas")
-        }
-    return render_template("admin.html", users=users, index_info=index_info)
+        for token, u in users.items():
+            conteo = {}
+            for t, fids in _carpetas_de_usuario(u, users).items():
+                conteo[t] = sum(len(_INDEX_CACHE.get(fid, {})) for fid in fids)
+            filas[token] = dict(u, conteo=conteo, legado=_usa_legado(u))
+    orden = {PERFIL_GENERAL: 0, PERFIL_UNIVERSAL: 1, PERFIL_EMPRESA: 2}
+    filas = dict(sorted(filas.items(), key=lambda kv: (orden.get(kv[1]["tipo"], 9),
+                                                        not kv[1]["activo"], kv[1]["empresa"].lower())))
+    return render_template(
+        "admin.html", users=filas, index_info=index_info,
+        raiz_ok=bool(FOLDER_RAIZ_EMPRESAS), carpeta_universal=_carpeta_universal(users),
+        legado={"manifiestos": FOLDER_ID_MANIFIESTOS, "facturas": FOLDER_ID_FACTURAS},
+        base_url=BASE_URL,
+    )
 
 
-# ── FIX: endpoint para que admin refresque contadores en tiempo real ──
 @app.route("/admin/index_status")
 def admin_index_status():
     if not _check_admin():
         return jsonify({"error": "No autorizado"}), 401
-    with _INDEX_LOCK:
-        info = {
-            sec: {
-                "listo": _INDEX_BUILT.get(sec, False),
-                "pdfs": len(_INDEX_CACHE.get(sec, {})),
-            }
-            for sec in ("manifiestos", "facturas")
-        }
-    return jsonify(info)
+    return jsonify(_resumen_indice())
 
 
 @app.route("/admin/login", methods=["POST"])
@@ -1178,21 +1439,90 @@ def admin_logout():
 def admin_agregar_empresa():
     if not _check_admin():
         return jsonify({"error": "No autorizado"}), 401
-    empresa = (request.form.get("empresa") or request.get_json(silent=True, force=True) or {}).get("empresa") or ""
-    if isinstance(empresa, dict):
-        empresa = ""
-    empresa = str(empresa).strip()
-    if not empresa:
-        data = request.get_json(silent=True) or {}
-        empresa = data.get("empresa", "").strip()
+    data = request.get_json(silent=True) or {}
+    empresa = str(data.get("empresa") or request.form.get("empresa") or "").strip()
+    tipo = str(data.get("tipo") or PERFIL_EMPRESA).upper()
+    if tipo not in PERFILES:
+        tipo = PERFIL_EMPRESA
     if not empresa:
         return jsonify({"error": "Nombre de empresa requerido"}), 400
+
+    try:
+        carpetas = _crear_carpetas(empresa, tipo)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        print(f"[ADMIN] Error creando carpetas: {e}", flush=True)
+        return jsonify({"error": f"No se pudieron crear las carpetas en Drive: {e}"}), 500
+
     token = _generate_token()
-    ok = _add_user_to_sheets(empresa, token)
+    ok = _add_user_to_sheets(empresa, token, tipo, carpetas)
     if ok:
-        url = f"https://pdfocus-web-1sbt.onrender.com/?token={token}"
-        return jsonify({"ok": True, "empresa": empresa, "token": token, "url": url})
+        fids = [fid for fid in carpetas.values() if fid]
+        if fids:
+            _indexar_carpetas_en_background(fids)
+        url = f"{BASE_URL}/?token={token}"
+        return jsonify({"ok": True, "empresa": empresa, "token": token, "url": url, "tipo": tipo})
     return jsonify({"error": "No se pudo guardar en Sheets"}), 500
+
+
+@app.route("/admin/carpetas", methods=["POST"])
+def admin_carpetas():
+    """Asigna carpetas a un perfil (link o ID) y crea automáticamente las que queden vacías."""
+    if not _check_admin():
+        return jsonify({"error": "No autorizado"}), 401
+    data  = request.get_json() or {}
+    token = data.get("token", "").strip()
+    users = _users_snapshot()
+    u = users.get(token)
+    if not u:
+        return jsonify({"error": "Empresa no encontrada"}), 404
+    if u["tipo"] == PERFIL_GENERAL:
+        return jsonify({"error": "El perfil General no tiene carpetas propias: ve las de todos."}), 400
+    try:
+        nuevas = {t: _id_de_link(data.get(t, "")) for t in TIPOS_DOC}
+        if u["tipo"] == PERFIL_UNIVERSAL:
+            nuevas["facturas"] = nuevas["otros"] = ""
+        if data.get("crear_faltantes"):
+            nuevas = _crear_carpetas(u["empresa"], u["tipo"], nuevas)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": f"No se pudieron crear las carpetas en Drive: {e}"}), 500
+
+    if not _set_user_carpetas(token, nuevas):
+        return jsonify({"error": "No se pudo guardar en Sheets"}), 500
+    fids = [fid for fid in nuevas.values() if fid]
+    if fids:
+        _indexar_carpetas_en_background(fids)
+    return jsonify({"ok": True, "carpetas": nuevas})
+
+
+@app.route("/admin/rebuild_empresa", methods=["POST"])
+def admin_rebuild_empresa():
+    """Reindexa solo las carpetas de un perfil."""
+    if not _check_admin():
+        return jsonify({"error": "No autorizado"}), 401
+    token = (request.get_json() or {}).get("token", "").strip()
+    users = _users_snapshot()
+    u = users.get(token)
+    if not u:
+        return jsonify({"error": "Empresa no encontrada"}), 404
+    fids = [fid for lst in _carpetas_de_usuario(u, users).values() for fid in lst]
+    if not fids:
+        return jsonify({"error": "Esta empresa no tiene carpetas"}), 400
+
+    def _run():
+        for fid in fids:
+            with _INDEX_LOCK:
+                _INDEX_BUILT.pop(fid, None)
+                _INDEX_CACHE.pop(fid, None)
+            try:
+                build_index(fid, fid)
+            except Exception as e:
+                print(f"[INDEX] Error reindexando {fid}: {e}", flush=True)
+    threading.Thread(target=_run, daemon=True).start()
+    return jsonify({"ok": True, "mensaje": f"Reindexando {len(fids)} carpeta(s)."})
 
 
 @app.route("/admin/set_password", methods=["POST"])
@@ -1237,8 +1567,7 @@ def admin_rebuild_index():
     if not _check_admin():
         return jsonify({"error": "No autorizado"}), 401
     with _INDEX_LOCK:
-        _INDEX_BUILT["manifiestos"] = False
-        _INDEX_BUILT["facturas"]    = False
+        _INDEX_BUILT.clear()
         _INDEX_CACHE.clear()
     try:
         if os.path.exists(INDEX_CACHE_PATH):
@@ -1269,7 +1598,7 @@ def admin_qr_imagen(token_cliente):
     except ImportError:
         return "Librería qrcode no instalada. Agrega 'qrcode[pil]' a requirements.txt.", 500
 
-    url_cliente = f"https://pdfocus-web-1sbt.onrender.com/?token={token_cliente}"
+    url_cliente = f"{BASE_URL}/?token={token_cliente}"
     qr = qrcode.QRCode(
         version=None,
         error_correction=qrcode.constants.ERROR_CORRECT_H,
@@ -1294,7 +1623,7 @@ def admin_qr_page(token_cliente):
     users = _get_users()
     user_info = users.get(token_cliente, {})
     empresa = user_info.get("empresa", token_cliente)
-    url_cliente = f"https://pdfocus-web-1sbt.onrender.com/?token={token_cliente}"
+    url_cliente = f"{BASE_URL}/?token={token_cliente}"
 
     # Generar QR como base64 para embeber en HTML
     try:
@@ -1469,93 +1798,73 @@ def admin_qr_page(token_cliente):
 
 
 def _rebuild_all():
-    if FOLDER_ID_MANIFIESTOS:
-        build_index(FOLDER_ID_MANIFIESTOS, "manifiestos")
-    if FOLDER_ID_FACTURAS:
-        build_index(FOLDER_ID_FACTURAS, "facturas")
+    for fid in _mapa_carpetas():
+        try:
+            build_index(fid, fid)
+        except Exception as e:
+            print(f"[INDEX] Error construyendo {fid}: {e}", flush=True)
+
+
+def _update_all(etiqueta):
+    for fid in _mapa_carpetas():
+        try:
+            update_index_incremental(fid, fid)
+        except Exception as e:
+            print(f"[{etiqueta}] Error actualizando {fid}: {e}", flush=True)
 
 
 # ── ACTUALIZACIÓN INCREMENTAL CADA 15 MINUTOS ────────────────
 def _hourly_update_loop():
-    # Esperar a que el índice esté listo antes de empezar el ciclo
-    while not (_INDEX_BUILT.get("manifiestos") and _INDEX_BUILT.get("facturas")):
-        time.sleep(60)
+    _STARTUP_DONE.wait()
     while True:
         time.sleep(_UPDATE_INTERVAL)
         print("[HOURLY] Iniciando actualización incremental...", flush=True)
-        if FOLDER_ID_MANIFIESTOS:
-            try:
-                update_index_incremental(FOLDER_ID_MANIFIESTOS, "manifiestos")
-            except Exception as e:
-                print(f"[HOURLY] Error actualizando manifiestos: {e}", flush=True)
-        if FOLDER_ID_FACTURAS:
-            try:
-                update_index_incremental(FOLDER_ID_FACTURAS, "facturas")
-            except Exception as e:
-                print(f"[HOURLY] Error actualizando facturas: {e}", flush=True)
+        _reload_users_sync()
+        _update_all("HOURLY")
         print("[HOURLY] Actualización incremental completada.", flush=True)
 
 
 # ── ARRANQUE DEL ÍNDICE ──────────────────────────────────────
 def _start_index_background():
     def _build():
-        print("[STARTUP] Iniciando construcción del índice...", flush=True)
-        if not SERVICE_ACCOUNT_JSON:
-            print("[STARTUP] ERROR: GOOGLE_SERVICE_ACCOUNT está vacío.", flush=True)
-            return
+        try:
+            print("[STARTUP] Iniciando construcción del índice...", flush=True)
+            if not SERVICE_ACCOUNT_JSON:
+                print("[STARTUP] ERROR: GOOGLE_SERVICE_ACCOUNT está vacío.", flush=True)
+                return
+            # Las carpetas a indexar dependen de los usuarios: se cargan primero
+            if _USERS_LOADING.is_set():
+                _USERS_LOADING.wait(timeout=30)
+            if not _USERS_CACHE:
+                _reload_users_sync()
+            _asegurar_encabezados_usuarios()
 
-        def _run_update():
-            """Corre actualización incremental inmediatamente después de cargar caché."""
-            print("[STARTUP] Corriendo actualización incremental de arranque...", flush=True)
-            if FOLDER_ID_MANIFIESTOS:
-                try:
-                    update_index_incremental(FOLDER_ID_MANIFIESTOS, "manifiestos")
-                except Exception as e:
-                    print(f"[STARTUP] Error update manifiestos: {e}", flush=True)
-            if FOLDER_ID_FACTURAS:
-                try:
-                    update_index_incremental(FOLDER_ID_FACTURAS, "facturas")
-                except Exception as e:
-                    print(f"[STARTUP] Error update facturas: {e}", flush=True)
-            print("[STARTUP] Actualización incremental de arranque completada.", flush=True)
+            # 1. Caché local /tmp (reinicios rápidos del mismo worker)
+            if _load_index_from_disk():
+                print("[STARTUP] ✅ Índice desde /tmp. Corriendo incremental de arranque...", flush=True)
+                _update_all("STARTUP")
+                return
 
-        # 1. Caché local /tmp (reinicios rápidos del mismo worker)
-        if _load_index_from_disk():
-            print("[STARTUP] ✅ Índice desde /tmp. Corriendo incremental de arranque...", flush=True)
-            _run_update()
-            return
+            # 2. Caché en Sheets (sobrevive deploys y reinicios de worker)
+            if _load_index_from_drive():
+                total = sum(len(v) for v in _INDEX_CACHE.values())
+                print(f"[STARTUP] ✅ Índice desde Sheets ({total} PDFs). Corriendo incremental de arranque...", flush=True)
+                _update_all("STARTUP")
+                return
 
-        # 2. Caché en Sheets (sobrevive deploys y reinicios de worker)
-        if _load_index_from_drive():
-            total = sum(len(v) for v in _INDEX_CACHE.values())
-            print(f"[STARTUP] ✅ Índice desde Sheets ({total} PDFs). Corriendo incremental de arranque...", flush=True)
-            _run_update()
-            return
-
-        # 3. Construir desde cero
-        print("[STARTUP] Sin caché. Construyendo desde cero...", flush=True)
-        if FOLDER_ID_MANIFIESTOS:
-            try:
-                build_index(FOLDER_ID_MANIFIESTOS, "manifiestos")
-            except Exception as e:
-                print(f"[STARTUP] Error manifiestos: {e}", flush=True)
-                traceback.print_exc()
-        if FOLDER_ID_FACTURAS:
-            try:
-                build_index(FOLDER_ID_FACTURAS, "facturas")
-            except Exception as e:
-                print(f"[STARTUP] Error facturas: {e}", flush=True)
-                traceback.print_exc()
-        print("[STARTUP] Índice listo.", flush=True)
+            # 3. Construir desde cero
+            print("[STARTUP] Sin caché. Construyendo desde cero...", flush=True)
+            _rebuild_all()
+            print("[STARTUP] Índice listo.", flush=True)
+        finally:
+            _STARTUP_DONE.set()
 
     threading.Thread(target=_build, daemon=True).start()
     threading.Thread(target=_hourly_update_loop, daemon=True).start()
 
 
-_start_index_background()
-# Precargar usuarios en background al arrancar
-# Marcamos el Event ANTES de lanzar el thread para que admin_panel y _validate_token
-# puedan esperar correctamente desde el primer instante.
+# Precargar usuarios en background al arrancar. Se marca el Event ANTES de lanzar
+# el thread para que admin_panel, _validate_token y el índice esperen correctamente.
 _USERS_LOADING.set()
 def _initial_users_load():
     try:
@@ -1563,6 +1872,7 @@ def _initial_users_load():
     finally:
         _USERS_LOADING.clear()
 threading.Thread(target=_initial_users_load, daemon=True).start()
+_start_index_background()
 
 if __name__ == "__main__":
     app.run(debug=False, host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
