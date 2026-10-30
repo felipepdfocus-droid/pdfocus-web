@@ -1151,6 +1151,12 @@ def ensure_index(section_key, folder_id):
 
 
 def _indexar_carpetas_en_background(fids, reconstruir=False):
+    # Mientras el índice todavía se carga al arrancar, una actualización creería que
+    # las carpetas están vacías y las reindexaría completas. En ese caso no se hace:
+    # la revisión automática las tomará cuando el arranque termine.
+    if not _STARTUP_DONE.is_set():
+        print("[INDEX] Índice aún cargando; la actualización queda para la revisión automática.", flush=True)
+        return False
     def _run():
         for fid in fids:
             try:
@@ -1164,6 +1170,7 @@ def _indexar_carpetas_en_background(fids, reconstruir=False):
             except Exception as e:
                 print(f"[INDEX] Error indexando carpeta {fid}: {e}", flush=True)
     threading.Thread(target=_run, daemon=True).start()
+    return True
 
 
 def _resumen_indice(mapa=None):
@@ -1496,6 +1503,24 @@ def admin_carpetas():
     if fids:
         _indexar_carpetas_en_background(fids)
     return jsonify({"ok": True, "carpetas": nuevas})
+
+
+@app.route("/admin/actualizar_empresa", methods=["POST"])
+def admin_actualizar_empresa():
+    """Trae solo los PDFs nuevos/modificados de las carpetas de un perfil (rápido)."""
+    if not _check_admin():
+        return jsonify({"error": "No autorizado"}), 401
+    token = (request.get_json() or {}).get("token", "").strip()
+    users = _users_snapshot()
+    u = users.get(token)
+    if not u:
+        return jsonify({"error": "Empresa no encontrada"}), 404
+    fids = [fid for lst in _carpetas_de_usuario(u, users).values() for fid in lst]
+    if not fids:
+        return jsonify({"error": "Esta empresa no tiene carpetas"}), 400
+    if not _indexar_carpetas_en_background(fids):
+        return jsonify({"error": "El índice todavía se está cargando. Espera a que diga 'Listo' e intenta de nuevo."}), 409
+    return jsonify({"ok": True, "mensaje": "Buscando documentos nuevos…"})
 
 
 @app.route("/admin/rebuild_empresa", methods=["POST"])
