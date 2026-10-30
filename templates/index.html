@@ -473,9 +473,17 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ codigo, tipo: tipoActivo }),
       });
-      const data = await resp.json();
+      let data;
+      try { data = await resp.json(); }
+      catch (e) { data = { error: "Tu sesión se cerró. Ingresa de nuevo con tu contraseña.", relogin: true }; }
       estado.textContent = "";
 
+      if (data.relogin) {
+        resultados.innerHTML = `<div class="msg-error">${escHtml(data.error)}
+          <div style="margin-top:10px"><a class="btn-search" style="display:inline-block;text-decoration:none"
+            href="/?token=${encodeURIComponent(TOKEN)}">Ingresar de nuevo</a></div></div>`;
+        return;
+      }
       if (data.error) {
         resultados.innerHTML = `<div class="msg-error">${escHtml(data.error)}</div>`;
         return;
