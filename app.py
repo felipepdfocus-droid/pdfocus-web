@@ -1946,16 +1946,48 @@ def _start_index_background():
     threading.Thread(target=_hourly_update_loop, daemon=True).start()
 
 
-# Precargar usuarios en background al arrancar. Se marca el Event ANTES de lanzar
-# el thread para que admin_panel, _validate_token y el índice esperen correctamente.
-_USERS_LOADING.set()
-def _initial_users_load():
-    try:
-        _reload_users_sync()
-    finally:
-        _USERS_LOADING.clear()
-threading.Thread(target=_initial_users_load, daemon=True).start()
-_start_index_background()
+# ── ARRANQUE EN EL PROCESO QUE ATIENDE LAS PÁGINAS ───────────
+# En Render, gunicorn puede importar este archivo en el proceso PRINCIPAL y luego crear
+# el proceso TRABAJADOR (fork). Los hilos no pasan al trabajador: si la carga del índice
+# arrancara al importar, el índice quedaría en el principal y el trabajador (que atiende
+# el panel y el buscador) quedaría vacío, reindexando todo desde cero en cada búsqueda.
+# Por eso todo arranca con la PRIMERA petición que recibe cada proceso trabajador
+# (Render y UptimeRobot hacen una apenas el servicio inicia).
+_ARRANQUE = {"pid": None}
+_ARRANQUE_LOCK = threading.Lock()
+
+
+def _arrancar_en_este_proceso():
+    global _INDEX_LOCK, _USERS_LOCK, _USERS_LOADING, _STARTUP_DONE
+    # Cerrojos y eventos nuevos: los copiados del proceso principal podrían haber
+    # quedado tomados en el momento del fork.
+    _INDEX_LOCK    = threading.Lock()
+    _USERS_LOCK    = threading.Lock()
+    _USERS_LOADING = threading.Event()
+    _STARTUP_DONE  = threading.Event()
+    print(f"[STARTUP] Arrancando en el proceso {os.getpid()}...", flush=True)
+
+    # Se marca ANTES de lanzar el hilo para que el panel, _validate_token y el
+    # índice esperen correctamente a que carguen los usuarios.
+    _USERS_LOADING.set()
+    def _initial_users_load():
+        try:
+            _reload_users_sync()
+        finally:
+            _USERS_LOADING.clear()
+    threading.Thread(target=_initial_users_load, daemon=True).start()
+    _start_index_background()
+
+
+@app.before_request
+def _asegurar_arranque():
+    if _ARRANQUE["pid"] == os.getpid():
+        return
+    with _ARRANQUE_LOCK:
+        if _ARRANQUE["pid"] == os.getpid():
+            return
+        _ARRANQUE["pid"] = os.getpid()
+        _arrancar_en_este_proceso()
 
 if __name__ == "__main__":
     app.run(debug=False, host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
