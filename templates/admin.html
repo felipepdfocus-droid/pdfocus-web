@@ -280,6 +280,9 @@
     .btn-fold   { background: rgba(59,130,246,0.1); border-color: rgba(59,130,246,0.3); color: #60a5fa; }
     .btn-fold:hover { background: rgba(59,130,246,0.2); }
 
+    .btn-upd    { background: rgba(34,197,94,0.1); border-color: rgba(34,197,94,0.3); color: #4ade80; }
+    .btn-upd:hover { background: rgba(34,197,94,0.2); }
+
     .btn-reidx  { background: rgba(100,116,139,0.12); border-color: #334155; color: #94a3b8; }
     .btn-reidx:hover { background: rgba(100,116,139,0.2); color: #cbd5e1; }
 
@@ -597,7 +600,9 @@
               <button class="btn-sm btn-fold"
                 onclick='openCarpetas({{ token|tojson }}, {{ u.empresa|tojson }}, {{ u.tipo|tojson }}, {{ u.carpetas|tojson }}, {{ u.legado|tojson }})'>📁 Carpetas</button>
               {% endif %}
-              <button class="btn-sm btn-reidx"
+              <button class="btn-sm btn-upd" title="Trae solo los PDFs nuevos (rápido)"
+                onclick='actualizar({{ token|tojson }}, {{ u.empresa|tojson }})'>↻ Actualizar ahora</button>
+              <button class="btn-sm btn-reidx" title="Vuelve a leer TODOS los PDFs de esta empresa (lento)"
                 onclick='reindexar({{ token|tojson }}, {{ u.empresa|tojson }})'>⟳ Reindexar</button>
               {% if u.activo %}
               <button class="btn-sm btn-deact"
@@ -747,8 +752,19 @@
     }
   }
 
+  async function actualizar(token, nombre) {
+    const r = await fetch("/admin/actualizar_empresa", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token })
+    });
+    const d = await r.json();
+    toast(d.ok ? `Buscando documentos nuevos de ${nombre}… los contadores se actualizan en unos segundos` : (d.error || "Error"), d.ok);
+    if (d.ok) setTimeout(() => location.reload(), 8000);
+  }
+
   async function reindexar(token, nombre) {
-    if (!confirm(`¿Reindexar los documentos de "${nombre}"? Puede tardar unos minutos.`)) return;
+    if (!confirm(`¿Reindexar TODOS los documentos de "${nombre}" desde cero?\n\nEs lento si tiene muchos PDFs. Para traer solo lo nuevo usa "Actualizar ahora".`)) return;
     const r = await fetch("/admin/rebuild_empresa", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
