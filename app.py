@@ -33,6 +33,15 @@ from datetime import datetime
 
 import gzip
 import base64
+import sys
+
+# PyMuPDF 2.x carga automáticamente módulos de análisis de diseño con inteligencia
+# artificial (pymupdf.layout, pymupdf4llm, onnxruntime) que PDFocus NO usa y que gastan
+# ~80 MB de memoria. Se bloquean antes de importar PyMuPDF; él los trata como "no
+# instalados" y la extracción de texto y el resaltado funcionan igual.
+for _modulo in ("pymupdf.layout", "pymupdf4llm", "onnxruntime"):
+    sys.modules.setdefault(_modulo, None)
+
 import pymupdf as fitz
 from flask import (
     Flask, request, jsonify, send_file,
@@ -618,8 +627,18 @@ def _validate_token(token):
 
 
 def _is_authenticated(token):
-    """Verifica si el token está autenticado en la sesión Flask actual."""
-    return session.get("auth_token") == token
+    """Verifica si el token está autenticado en la sesión Flask actual.
+    Un mismo navegador puede tener varias empresas abiertas a la vez."""
+    return token in session.get("auth_tokens", []) or session.get("auth_token") == token
+
+
+def _marcar_autenticado(token):
+    """Agrega la empresa a las sesiones abiertas de este navegador (sin cerrar las otras)."""
+    lista = [t for t in session.get("auth_tokens", []) if t != token]
+    lista.append(token)
+    session["auth_tokens"] = lista[-10:]
+    session["auth_token"] = token
+    session.permanent = True
 
 
 # ── CARPETAS POR PERFIL ───────────────────────────────────────
@@ -1245,13 +1264,20 @@ def require_token(f):
     def decorated(*args, **kwargs):
         token = request.args.get("token") or request.cookies.get("pdfocus_token")
         user_info = _validate_token(token)
+        # Las búsquedas se hacen desde JavaScript: en vez de redirigir a otra página,
+        # se responde un error claro para que el buscador pida ingresar de nuevo.
+        es_api = request.method == "POST" and request.path == "/buscar"
         if not user_info:
+            if es_api:
+                return jsonify({"error": "Tu acceso no es válido o fue desactivado.", "relogin": True}), 401
             return redirect(url_for("login_page"))
 
         if user_info.get("password_hash"):
             if not _is_authenticated(token):
                 session["pending_token"] = token
-                return redirect(url_for("password_page"))
+                if es_api:
+                    return jsonify({"error": "Tu sesión se cerró. Ingresa de nuevo con tu contraseña.", "relogin": True}), 401
+                return redirect(url_for("password_page") + f"?token={token}")
 
         empresa = user_info["empresa"]
         return f(*args, empresa=empresa, token=token, user=user_info, **kwargs)
@@ -1267,13 +1293,13 @@ def login_page():
 @app.route("/password")
 def password_page():
     """Página de ingreso de contraseña (cuando la empresa tiene contraseña configurada)."""
-    token = session.get("pending_token") or request.args.get("token") or request.cookies.get("pdfocus_token")
+    token = request.args.get("token") or session.get("pending_token") or request.cookies.get("pdfocus_token")
     user_info = _validate_token(token)
     if not user_info:
         return redirect(url_for("login_page"))
     # Si no tiene contraseña configurada aún, dar acceso directo
     if not user_info.get("password_hash"):
-        session["auth_token"] = token
+        _marcar_autenticado(token)
         resp = make_response(redirect(url_for("index") + f"?token={token}"))
         resp.set_cookie("pdfocus_token", token, max_age=60 * 60 * 24 * 30)
         return resp
@@ -1294,14 +1320,13 @@ def verificar_password():
 
     if not password_hash:
         # Sin contraseña configurada — acceso directo
-        session["auth_token"] = token
+        _marcar_autenticado(token)
         resp = make_response(redirect(url_for("index") + f"?token={token}"))
         resp.set_cookie("pdfocus_token", token, max_age=60 * 60 * 24 * 30)
         return resp
 
     if check_password_hash(password_hash, password):
-        session["auth_token"] = token
-        session.permanent = True
+        _marcar_autenticado(token)
         resp = make_response(redirect(url_for("index") + f"?token={token}"))
         resp.set_cookie("pdfocus_token", token, max_age=60 * 60 * 24 * 30)
         return resp
