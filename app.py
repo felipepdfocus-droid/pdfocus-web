@@ -731,13 +731,13 @@ def list_pdfs_in_folder(folder_id, include_modified_time=False):
         while True:
             params = {
                 "q": f"'{fid}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false",
-                "fields": "nextPageToken, files(id)",
+                "fields": "nextPageToken, files(id, name)",
                 "pageSize": 1000,
             }
             if pt:
                 params["pageToken"] = pt
             r = _drive_get("files", params)
-            subs.extend([f["id"] for f in r.get("files", [])])
+            subs.extend([(f["id"], f.get("name", "")) for f in r.get("files", [])])
             pt = r.get("nextPageToken")
             if not pt:
                 break
@@ -762,16 +762,21 @@ def list_pdfs_in_folder(folder_id, include_modified_time=False):
                 break
         return pdfs
 
+    # Cada PDF lleva "ruta": las subcarpetas desde la carpeta principal
+    # (ej: "2026/2026-08-27 IMPORTACION YIWU"). Se usa para mostrar la carpeta y el año.
     all_pdfs = []
-    queue = [folder_id]
+    queue = [(folder_id, "")]
     visited = set()
     while queue:
-        fid = queue.pop(0)
+        fid, ruta = queue.pop(0)
         if fid in visited:
             continue
         visited.add(fid)
-        all_pdfs.extend(_get_pdfs(fid))
-        queue.extend(_get_subfolders(fid))
+        for f in _get_pdfs(fid):
+            f["ruta"] = ruta
+            all_pdfs.append(f)
+        for sub_id, sub_nombre in _get_subfolders(fid):
+            queue.append((sub_id, f"{ruta}/{sub_nombre}" if ruta else sub_nombre))
     return all_pdfs
 
 
@@ -1032,6 +1037,31 @@ def annotate_pdf_bytes(pdf_bytes, ref_raw, mode="manifesto"):
     return out.read(), found
 
 
+# ── FECHA Y AÑO PARA ORDENAR Y FILTRAR (no afecta la búsqueda) ─
+_RE_ANIO = re.compile(r"(?<!\d)(19[89]\d|20\d{2})(?!\d)")
+
+
+def _fecha_valida(texto):
+    """Fecha del nombre, ignorando números que no son un año real (ej: "INVOICE 8812")."""
+    k = _fecha_clave(texto or "")
+    return k if 1990 <= k[0] <= 2100 else (0, 0, 0)
+
+
+def _fecha_carpeta(ruta):
+    if not ruta:
+        return (0, 0, 0)
+    k = _fecha_valida(ruta.split("/")[-1])
+    return k if k != (0, 0, 0) else _fecha_valida(ruta)
+
+
+def _anio_doc(ruta, nombre):
+    for t in (ruta, nombre):
+        m = _RE_ANIO.search(t or "")
+        if m:
+            return m.group(1)
+    return ""
+
+
 # ── ÍNDICE (por carpeta de Drive) ─────────────────────────────
 # build_index / update_index_incremental reciben (folder_id, clave); la clave del
 # índice ES el folder_id, así cada carpeta se indexa una sola vez aunque la usen
@@ -1070,6 +1100,7 @@ def build_index(folder_id, section_key):
                 "name": f["name"],
                 "compact": _compress_compact(compact),
                 "modified_time": f.get("modifiedTime", ""),
+                "ruta": f.get("ruta", ""),
             }
             print(f"  ✔ Indexado: {f['name']}", flush=True)
         except Exception as e:
@@ -1107,10 +1138,15 @@ def update_index_incremental(folder_id, section_key):
         del current[fid]
 
     nuevos = 0
+    rutas = 0
     for f in pdfs:
         fid = f["id"]
         mod = f.get("modifiedTime", "")
         if fid in current and current[fid].get("modified_time") == mod:
+            # Sin cambios en el PDF: solo se completa/actualiza la ruta (sin descargar nada)
+            if current[fid].get("ruta") != f.get("ruta", ""):
+                current[fid] = dict(current[fid], ruta=f.get("ruta", ""))
+                rutas += 1
             continue
         try:
             data = download_pdf_bytes(fid)
@@ -1119,6 +1155,7 @@ def update_index_incremental(folder_id, section_key):
                 "name": f["name"],
                 "compact": _compress_compact(compact),
                 "modified_time": mod,
+                "ruta": f.get("ruta", ""),
             }
             print(f"  ✔ Actualizado: {f['name']}", flush=True)
             nuevos += 1
@@ -1137,7 +1174,7 @@ def update_index_incremental(folder_id, section_key):
         _INDEX_CACHE[section_key] = current
         _INDEX_BUILT[section_key] = True
 
-    if nuevos > 0 or removed:
+    if nuevos > 0 or removed or rutas:
         _save_index_to_disk()
         _save_index_to_drive()
 
@@ -1327,10 +1364,17 @@ def buscar(empresa=None, token=None, user=None):
                     compact = _decompress_compact(compact)
                 if ref_in_text_safe(ref_norm, compact):
                     vistos.add(file_id)
+                    ruta = info.get("ruta", "")
+                    f_doc = _fecha_valida(info["name"])
+                    f_carp = _fecha_carpeta(ruta)
                     item = {
                         "nombre":   info["name"],
                         "tipo":     "otros" if t == "otros" else MODO_DOC[t],
                         "drive_id": file_id,
+                        "ruta":     ruta,
+                        "anio":     _anio_doc(ruta, info["name"]),
+                        "fecha":    list(f_doc if f_doc != (0, 0, 0) else f_carp),
+                        "fecha_carpeta": list(f_carp),
                     }
                     if es_general:
                         item["empresa"] = " / ".join(sorted(duenos.get(folder_id, []))) or ""
@@ -1339,7 +1383,7 @@ def buscar(empresa=None, token=None, user=None):
     if not resultados:
         return jsonify({"resultados": [], "mensaje": "No se encontró la referencia en ningún PDF."})
 
-    resultados.sort(key=lambda x: _fecha_clave(x["nombre"]), reverse=True)
+    resultados.sort(key=lambda x: tuple(x["fecha"]), reverse=True)
     return jsonify({"resultados": resultados})
 
 
