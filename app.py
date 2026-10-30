@@ -102,6 +102,11 @@ _USERS_CACHE  = {}
 _USERS_LOCK   = threading.Lock()
 _USERS_LOADED = {"ts": 0}
 
+# Tiempo máximo de espera para cada llamada a Google (segundos): (conexión, respuesta).
+# Sin esto, si Google no responde, el proceso se queda esperando para siempre.
+_TIMEOUT_API      = (15, 60)
+_TIMEOUT_DESCARGA = (15, 180)
+
 # Intervalo de actualización incremental (15 minutos)
 _UPDATE_INTERVAL = 900
 
@@ -126,7 +131,7 @@ def _get_token():
 def _drive_get(path, params=None):
     token = _get_token()
     url = f"https://www.googleapis.com/drive/v3/{path}"
-    r = _requests.get(url, headers={"Authorization": f"Bearer {token}"}, params=params or {})
+    r = _requests.get(url, headers={"Authorization": f"Bearer {token}"}, params=params or {}, timeout=_TIMEOUT_API)
     r.raise_for_status()
     return r.json()
 
@@ -134,7 +139,7 @@ def _drive_get(path, params=None):
 def _drive_get_media(file_id):
     token = _get_token()
     url = f"https://www.googleapis.com/drive/v3/files/{file_id}?alt=media"
-    r = _requests.get(url, headers={"Authorization": f"Bearer {token}"}, stream=True)
+    r = _requests.get(url, headers={"Authorization": f"Bearer {token}"}, stream=True, timeout=_TIMEOUT_DESCARGA)
     r.raise_for_status()
     return r.content
 
@@ -142,7 +147,7 @@ def _drive_get_media(file_id):
 def _sheets_get(range_):
     token = _get_token()
     url = f"https://sheets.googleapis.com/v4/spreadsheets/{SHEETS_ID}/values/{_url_encode(range_)}"
-    r = _requests.get(url, headers={"Authorization": f"Bearer {token}"})
+    r = _requests.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=_TIMEOUT_API)
     r.raise_for_status()
     return r.json()
 
@@ -151,7 +156,7 @@ def _sheets_update(range_, values):
     token = _get_token()
     url = f"https://sheets.googleapis.com/v4/spreadsheets/{SHEETS_ID}/values/{_url_encode(range_)}?valueInputOption=RAW"
     r = _requests.put(url, headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-                      json={"values": values})
+                      json={"values": values}, timeout=_TIMEOUT_API)
     r.raise_for_status()
     return r.json()
 
@@ -160,7 +165,7 @@ def _sheets_append(range_, values):
     token = _get_token()
     url = f"https://sheets.googleapis.com/v4/spreadsheets/{SHEETS_ID}/values/{_url_encode(range_)}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS"
     r = _requests.post(url, headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-                       json={"values": values})
+                       json={"values": values}, timeout=_TIMEOUT_API)
     r.raise_for_status()
     return r.json()
 
@@ -168,7 +173,7 @@ def _sheets_append(range_, values):
 def _sheets_clear(range_):
     token = _get_token()
     url = f"https://sheets.googleapis.com/v4/spreadsheets/{SHEETS_ID}/values/{_url_encode(range_)}:clear"
-    r = _requests.post(url, headers={"Authorization": f"Bearer {token}"})
+    r = _requests.post(url, headers={"Authorization": f"Bearer {token}"}, timeout=_TIMEOUT_API)
     r.raise_for_status()
     return r.json()
 
@@ -177,7 +182,7 @@ def _sheets_batch_update(body):
     token = _get_token()
     url = f"https://sheets.googleapis.com/v4/spreadsheets/{SHEETS_ID}:batchUpdate"
     r = _requests.post(url, headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-                       json=body)
+                       json=body, timeout=_TIMEOUT_API)
     r.raise_for_status()
     return r.json()
 
@@ -185,7 +190,7 @@ def _sheets_batch_update(body):
 def _sheets_get_meta():
     token = _get_token()
     url = f"https://sheets.googleapis.com/v4/spreadsheets/{SHEETS_ID}?fields=sheets.properties"
-    r = _requests.get(url, headers={"Authorization": f"Bearer {token}"})
+    r = _requests.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=_TIMEOUT_API)
     r.raise_for_status()
     return r.json()
 
@@ -203,8 +208,7 @@ def _drive_crear_carpeta(nombre, parent_id):
         "https://www.googleapis.com/drive/v3/files",
         headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
         params={"supportsAllDrives": "true", "fields": "id"},
-        json={"name": nombre, "mimeType": "application/vnd.google-apps.folder", "parents": [parent_id]},
-    )
+        json={"name": nombre, "mimeType": "application/vnd.google-apps.folder", "parents": [parent_id]}, timeout=_TIMEOUT_API)
     r.raise_for_status()
     return r.json()["id"]
 
