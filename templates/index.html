@@ -210,6 +210,25 @@
     }
     .res-icon.manifesto { background: #d1fae5; color: #059669; }
     .res-icon.factura   { background: #dbeafe; color: #1d4ed8; }
+    .res-icon.otros     { background: #fef3c7; color: #b45309; }
+    .res-empresa {
+      display: inline-block;
+      margin-left: 6px;
+      font-size: 0.7rem;
+      font-weight: 600;
+      color: var(--accent);
+      background: #eef3ff;
+      border-radius: 10px;
+      padding: 1px 8px;
+    }
+    .perfil-tag {
+      font-size: 0.68rem;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      color: var(--fg2);
+      margin-left: 4px;
+    }
     .res-info { flex: 1; min-width: 0; }
     .res-nombre {
       font-size: 0.88rem;
@@ -275,6 +294,7 @@
   <div class="empresa-badge">
     <span class="dot"></span>
     {{ empresa }}
+    {% if perfil == 'GENERAL' %}<span class="perfil-tag">· Acceso total</span>{% elif perfil == 'UNIVERSAL' %}<span class="perfil-tag">· Manifiestos</span>{% endif %}
   </div>
   {% endif %}
 </header>
@@ -289,11 +309,14 @@
       <button class="btn-search" id="btn-buscar" onclick="buscar()">Buscar</button>
     </div>
 
+    {% if tipos|length > 1 %}
     <div class="tipo-row">
       <button class="tipo-btn active" data-tipo="ambos" onclick="setTipo(this)">Todos</button>
-      <button class="tipo-btn" data-tipo="manifiestos" onclick="setTipo(this)">Manifiestos</button>
-      <button class="tipo-btn" data-tipo="facturas" onclick="setTipo(this)">Facturas</button>
+      {% if 'manifiestos' in tipos %}<button class="tipo-btn" data-tipo="manifiestos" onclick="setTipo(this)">Manifiestos</button>{% endif %}
+      {% if 'facturas' in tipos %}<button class="tipo-btn" data-tipo="facturas" onclick="setTipo(this)">Facturas</button>{% endif %}
+      {% if 'otros' in tipos %}<button class="tipo-btn" data-tipo="otros" onclick="setTipo(this)">Otros documentos</button>{% endif %}
     </div>
+    {% endif %}
 
     <div id="estado"></div>
   </div>
@@ -351,15 +374,22 @@
 
       estado.textContent = "";
       resultados.innerHTML = `<div class="res-header">${lista.length} resultado${lista.length > 1 ? "s" : ""}</div>`;
+      const TIPO_UI = {
+        manifesto: { clase: "manifesto", icono: "📋", nombre: "Manifiesto" },
+        manifiestos: { clase: "manifesto", icono: "📋", nombre: "Manifiesto" },
+        factura: { clase: "factura", icono: "🧾", nombre: "Factura" },
+        otros: { clase: "otros", icono: "📁", nombre: "Otro documento" },
+      };
       lista.forEach(r => {
-        const es_m = r.tipo === "manifesto" || r.tipo === "manifiestos";
+        const ui = TIPO_UI[r.tipo] || TIPO_UI.manifesto;
         const url = `/ver_pdf?drive_id=${encodeURIComponent(r.drive_id)}&codigo=${encodeURIComponent(codigo)}&tipo=${encodeURIComponent(r.tipo)}&token=${TOKEN}`;
+        const emp = r.empresa ? `<span class="res-empresa">${escHtml(r.empresa)}</span>` : "";
         resultados.innerHTML += `
           <a class="result-card" href="${url}" target="_blank">
-            <div class="res-icon ${es_m ? 'manifesto' : 'factura'}">${es_m ? '📋' : '🧾'}</div>
+            <div class="res-icon ${ui.clase}">${ui.icono}</div>
             <div class="res-info">
               <div class="res-nombre">${escHtml(r.nombre)}</div>
-              <div class="res-tipo">${es_m ? 'Manifiesto' : 'Factura'}</div>
+              <div class="res-tipo">${ui.nombre}${emp}</div>
             </div>
             <div class="res-arrow">›</div>
           </a>`;
