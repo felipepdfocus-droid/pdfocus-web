@@ -249,6 +249,105 @@
       flex-shrink: 0;
     }
 
+    /* ── FILTROS ── */
+    .filtros-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-top: 14px;
+      flex-wrap: wrap;
+    }
+    .filtros-row .tipo-row { margin-top: 0; }
+    .anio-box {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 0.78rem;
+      font-weight: 600;
+      color: var(--fg2);
+    }
+    .anio-box select {
+      font-family: inherit;
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: var(--fg);
+      background: var(--bg);
+      border: 1.5px solid var(--border);
+      border-radius: 8px;
+      padding: 5px 8px;
+    }
+
+    /* ── GRUPOS DE RESULTADOS ── */
+    .grupo {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      overflow: hidden;
+    }
+    .grupo > summary {
+      list-style: none;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 12px 16px;
+      font-size: 0.8rem;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--accent);
+      background: #f7f9ff;
+      border-bottom: 1px solid var(--border);
+      user-select: none;
+    }
+    .grupo > summary::-webkit-details-marker { display: none; }
+    .grupo > summary::before {
+      content: "▸";
+      font-size: 0.8rem;
+      transition: transform 0.15s;
+    }
+    .grupo[open] > summary::before { transform: rotate(90deg); }
+    .grupo:not([open]) > summary { border-bottom: none; }
+    .grupo .cnt {
+      margin-left: auto;
+      background: var(--accent);
+      color: #fff;
+      border-radius: 10px;
+      padding: 1px 9px;
+      font-size: 0.72rem;
+      letter-spacing: 0;
+    }
+    .grupo-lista { display: flex; flex-direction: column; }
+    .grupo-lista .result-card {
+      border: none;
+      border-radius: 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .grupo-lista .result-card:last-child { border-bottom: none; }
+    .grupo-lista .result-card:hover { background: #f7f9ff; box-shadow: none; }
+    .sub-carpeta {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 9px 16px;
+      font-size: 0.78rem;
+      font-weight: 700;
+      color: var(--fg);
+      background: #fbfbfd;
+      border-bottom: 1px solid var(--border);
+    }
+    .sub-carpeta small { margin-left: auto; color: var(--fg2); font-weight: 500; }
+    .result-card.en-carpeta { padding-left: 30px; }
+    .res-carpeta {
+      font-size: 0.72rem;
+      color: var(--fg2);
+      margin-top: 2px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
     /* ── EMPTY / ERROR ── */
     .msg-empty {
       background: var(--surface);
@@ -309,14 +408,21 @@
       <button class="btn-search" id="btn-buscar" onclick="buscar()">Buscar</button>
     </div>
 
-    {% if tipos|length > 1 %}
-    <div class="tipo-row">
-      <button class="tipo-btn active" data-tipo="ambos" onclick="setTipo(this)">Todos</button>
-      {% if 'manifiestos' in tipos %}<button class="tipo-btn" data-tipo="manifiestos" onclick="setTipo(this)">Manifiestos</button>{% endif %}
-      {% if 'facturas' in tipos %}<button class="tipo-btn" data-tipo="facturas" onclick="setTipo(this)">Facturas</button>{% endif %}
-      {% if 'otros' in tipos %}<button class="tipo-btn" data-tipo="otros" onclick="setTipo(this)">Otros documentos</button>{% endif %}
+    <div class="filtros-row">
+      {% if tipos|length > 1 %}
+      <div class="tipo-row">
+        <button class="tipo-btn active" data-tipo="ambos" onclick="setTipo(this)">Todos</button>
+        {% if 'manifiestos' in tipos %}<button class="tipo-btn" data-tipo="manifiestos" onclick="setTipo(this)">Manifiestos</button>{% endif %}
+        {% if 'facturas' in tipos %}<button class="tipo-btn" data-tipo="facturas" onclick="setTipo(this)">Facturas</button>{% endif %}
+        {% if 'otros' in tipos %}<button class="tipo-btn" data-tipo="otros" onclick="setTipo(this)">Otros documentos</button>{% endif %}
+      </div>
+      {% endif %}
+      <label class="anio-box">Año:
+        <select id="anio" onchange="pintar()">
+          <option value="">Todos los años</option>
+        </select>
+      </label>
     </div>
-    {% endif %}
 
     <div id="estado"></div>
   </div>
@@ -329,11 +435,21 @@
 <script>
   let tipoActivo = "ambos";
   const TOKEN = "{{ token }}";
+  let ultimos = [];        // resultados de la última búsqueda
+  let ultimoCodigo = "";
+
+  const GRUPOS = [
+    { tipo: "manifesto", nombre: "Manifiestos",      icono: "📋", clase: "manifesto", porCarpeta: false },
+    { tipo: "factura",   nombre: "Facturas",         icono: "🧾", clase: "factura",   porCarpeta: false },
+    { tipo: "otros",     nombre: "Otros documentos", icono: "📁", clase: "otros",     porCarpeta: true  },
+  ];
 
   function setTipo(btn) {
     document.querySelectorAll(".tipo-btn").forEach(b => b.classList.remove("active"));
     btn.classList.add("active");
     tipoActivo = btn.dataset.tipo;
+    // Si ya hay algo escrito, busca de nuevo con el filtro elegido
+    if (document.getElementById("codigo").value.trim() && ultimoCodigo) buscar();
   }
 
   document.getElementById("codigo").addEventListener("keydown", e => {
@@ -358,42 +474,16 @@
         body: JSON.stringify({ codigo, tipo: tipoActivo }),
       });
       const data = await resp.json();
+      estado.textContent = "";
 
       if (data.error) {
-        resultados.innerHTML = `<div class="msg-error">${data.error}</div>`;
-        estado.textContent = "";
+        resultados.innerHTML = `<div class="msg-error">${escHtml(data.error)}</div>`;
         return;
       }
-
-      const lista = data.resultados || [];
-      if (lista.length === 0) {
-        resultados.innerHTML = `<div class="msg-empty">No se encontró "<strong>${escHtml(codigo)}</strong>" en ningún documento.</div>`;
-        estado.textContent = "";
-        return;
-      }
-
-      estado.textContent = "";
-      resultados.innerHTML = `<div class="res-header">${lista.length} resultado${lista.length > 1 ? "s" : ""}</div>`;
-      const TIPO_UI = {
-        manifesto: { clase: "manifesto", icono: "📋", nombre: "Manifiesto" },
-        manifiestos: { clase: "manifesto", icono: "📋", nombre: "Manifiesto" },
-        factura: { clase: "factura", icono: "🧾", nombre: "Factura" },
-        otros: { clase: "otros", icono: "📁", nombre: "Otro documento" },
-      };
-      lista.forEach(r => {
-        const ui = TIPO_UI[r.tipo] || TIPO_UI.manifesto;
-        const url = `/ver_pdf?drive_id=${encodeURIComponent(r.drive_id)}&codigo=${encodeURIComponent(codigo)}&tipo=${encodeURIComponent(r.tipo)}&token=${TOKEN}`;
-        const emp = r.empresa ? `<span class="res-empresa">${escHtml(r.empresa)}</span>` : "";
-        resultados.innerHTML += `
-          <a class="result-card" href="${url}" target="_blank">
-            <div class="res-icon ${ui.clase}">${ui.icono}</div>
-            <div class="res-info">
-              <div class="res-nombre">${escHtml(r.nombre)}</div>
-              <div class="res-tipo">${ui.nombre}${emp}</div>
-            </div>
-            <div class="res-arrow">›</div>
-          </a>`;
-      });
+      ultimos = data.resultados || [];
+      ultimoCodigo = codigo;
+      llenarAnios();
+      pintar();
     } catch (err) {
       resultados.innerHTML = `<div class="msg-error">Error de conexión. Intenta de nuevo.</div>`;
       estado.textContent = "";
@@ -402,8 +492,93 @@
     }
   }
 
+  function llenarAnios() {
+    const sel = document.getElementById("anio");
+    const actual = sel.value;
+    const anios = [...new Set(ultimos.map(r => r.anio).filter(Boolean))].sort().reverse();
+    sel.innerHTML = `<option value="">Todos los años</option>` +
+      anios.map(a => `<option value="${a}">${a}</option>`).join("");
+    sel.value = anios.includes(actual) ? actual : "";
+  }
+
+  const cmpFecha = (a, b) => {
+    for (let i = 0; i < 3; i++) if ((b[i] || 0) !== (a[i] || 0)) return (b[i] || 0) - (a[i] || 0);
+    return 0;
+  };
+
+  function tarjeta(r, ui, mostrarCarpeta, enCarpeta) {
+    const url = `/ver_pdf?drive_id=${encodeURIComponent(r.drive_id)}&codigo=${encodeURIComponent(ultimoCodigo)}&tipo=${encodeURIComponent(r.tipo)}&token=${TOKEN}`;
+    const emp = r.empresa ? `<span class="res-empresa">${escHtml(r.empresa)}</span>` : "";
+    const carpeta = mostrarCarpeta && r.ruta
+      ? `<div class="res-carpeta">📂 ${escHtml(r.ruta.replace(/\//g, " › "))}${emp}</div>`
+      : (emp ? `<div class="res-carpeta">${emp}</div>` : "");
+    return `
+      <a class="result-card${enCarpeta ? " en-carpeta" : ""}" href="${url}" target="_blank">
+        <div class="res-icon ${ui.clase}">${ui.icono}</div>
+        <div class="res-info">
+          <div class="res-nombre">${escHtml(r.nombre)}</div>
+          ${carpeta}
+        </div>
+        <div class="res-arrow">›</div>
+      </a>`;
+  }
+
+  function pintar() {
+    const resultados = document.getElementById("resultados");
+    if (!ultimoCodigo) { resultados.innerHTML = ""; return; }
+    const anio = document.getElementById("anio").value;
+    const lista = ultimos.filter(r => !anio || r.anio === anio);
+
+    if (ultimos.length === 0) {
+      resultados.innerHTML = `<div class="msg-empty">No se encontró "<strong>${escHtml(ultimoCodigo)}</strong>" en ningún documento.</div>`;
+      return;
+    }
+    if (lista.length === 0) {
+      resultados.innerHTML = `<div class="msg-empty">"<strong>${escHtml(ultimoCodigo)}</strong>" aparece en ${ultimos.length} documento(s), pero ninguno es del año ${anio}.</div>`;
+      return;
+    }
+
+    const porGrupo = GRUPOS.map(g => ({ g, docs: lista.filter(r => (r.tipo === "manifiestos" ? "manifesto" : r.tipo) === g.tipo) }))
+                           .filter(x => x.docs.length);
+    const detalle = porGrupo.map(x => `${x.docs.length} ${x.g.nombre}`).join(" · ");
+    let html = `<div class="res-header">${lista.length} resultado${lista.length > 1 ? "s" : ""} para "${escHtml(ultimoCodigo.toUpperCase())}"${anio ? " en " + anio : ""} — ${detalle}</div>`;
+
+    porGrupo.forEach(({ g, docs }) => {
+      html += `<details class="grupo" open><summary>${g.icono} ${g.nombre}<span class="cnt">${docs.length}</span></summary><div class="grupo-lista">`;
+      if (!g.porCarpeta) {
+        // Lista simple: del más reciente al más antiguo
+        [...docs].sort((a, b) => cmpFecha(a.fecha || [], b.fecha || []))
+                 .forEach(r => html += tarjeta(r, g, true));
+      } else {
+        // Otros documentos: agrupados por carpeta (importación)
+        const carpetas = {};
+        const sueltos = [];
+        docs.forEach(r => r.ruta ? (carpetas[r.ruta] = carpetas[r.ruta] || []).push(r) : sueltos.push(r));
+        const items = Object.entries(carpetas).map(([ruta, ds]) => {
+          let f = ds[0].fecha_carpeta || [0, 0, 0];
+          if (!f[0]) f = ds.map(d => d.fecha || [0, 0, 0]).sort(cmpFecha)[0];
+          return { f, ruta, ds };
+        });
+        sueltos.forEach(r => items.push({ f: r.fecha || [0, 0, 0], ruta: "", ds: [r] }));
+        items.sort((a, b) => cmpFecha(a.f, b.f));
+        items.forEach(it => {
+          if (it.ruta) {
+            const partes = it.ruta.split("/");
+            const nombre = partes.pop();
+            html += `<div class="sub-carpeta">📂 ${escHtml(nombre)} (${it.ds.length})<small>${escHtml(partes.join(" › "))}</small></div>`;
+            it.ds.forEach(r => html += tarjeta(r, g, false, true));
+          } else {
+            html += tarjeta(it.ds[0], g, false);
+          }
+        });
+      }
+      html += `</div></details>`;
+    });
+    resultados.innerHTML = html;
+  }
+
   function escHtml(s) {
-    return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+    return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
   }
 </script>
 
