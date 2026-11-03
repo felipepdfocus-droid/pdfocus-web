@@ -887,6 +887,28 @@ def ref_in_text_safe(ref_norm, text):
         idx = text.find(ref_norm, idx + 1)
     return False
 
+def ref_in_text_nojoin(ref_norm, text):
+    """
+    Segundo intento para MANIFIESTOS (misma regla que find_reference_multi_nojoin, que
+    ya se usa al resaltar): une las palabras seguidas SIN separador, para encontrar
+    referencias partidas en dos renglones (ej: "K-81" al final de una línea y "2L" al
+    comienzo de la siguiente). Solo se usa si la búsqueda normal no la encontró.
+    """
+    if _SEP not in text:
+        return False
+    full_text = text.replace(_SEP, "")
+    SAFE = " \n\r\t.,:;()[]{}-/*"
+    idx = full_text.find(ref_norm)
+    while idx != -1:
+        fin = idx + len(ref_norm)
+        before = full_text[idx - 1] if idx > 0 else " "
+        after  = full_text[fin]     if fin < len(full_text) else " "
+        if (before in SAFE or not before.isalnum()) and (after in SAFE or not after.isalnum()):
+            return True
+        idx = full_text.find(ref_norm, idx + 1)
+    return False
+
+
 
 def generar_variantes(ref):
     r = normalize_text(ref).strip()
@@ -1432,7 +1454,10 @@ def buscar(empresa=None, token=None, user=None):
                 compact = info["compact"]
                 if isinstance(compact, bytes):
                     compact = _decompress_compact(compact)
-                if ref_in_text_safe(ref_norm, compact):
+                encontrado = ref_in_text_safe(ref_norm, compact)
+                if not encontrado and MODO_DOC[t] == "manifesto":
+                    encontrado = ref_in_text_nojoin(ref_norm, compact)
+                if encontrado:
                     vistos.add(file_id)
                     ruta = info.get("ruta", "")
                     f_doc = _fecha_valida(info["name"])
