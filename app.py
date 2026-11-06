@@ -1112,6 +1112,37 @@ def annotate_pdf_bytes(pdf_bytes, ref_raw, mode="manifesto"):
     out.seek(0)
     return out.read(), found
 
+def ir_a_pagina_resaltada(pdf_bytes):
+    """
+    Revisa en qué página quedó el PRIMER resaltado y le agrega al PDF la instrucción
+    estándar de abrirse ahí (OpenAction), a la altura de la referencia.
+    No cambia la búsqueda ni el resaltado: solo dónde arranca el visor.
+    Devuelve (bytes_del_pdf, número_de_página_desde_1 o None si no hay resaltado).
+    """
+    try:
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    except Exception:
+        return pdf_bytes, None
+    try:
+        for i in range(len(doc)):
+            pg = doc.load_page(i)
+            rects = [a.rect for a in pg.annots(types=[fitz.PDF_ANNOT_HIGHLIGHT])]
+            if not rects:
+                continue
+            if i == 0:
+                return pdf_bytes, 1          # ya abre en la página 1: no hace falta tocarlo
+            arriba = max(min(r.y0 for r in rects) - 40, 0)
+            punto = fitz.Point(0, arriba) * ~pg.transformation_matrix   # a coordenadas PDF
+            doc.xref_set_key(doc.pdf_catalog(), "OpenAction",
+                             f"[{pg.xref} 0 R /XYZ null {punto.y:.1f} null]")
+            return doc.tobytes(garbage=1), i + 1
+        return pdf_bytes, None
+    except Exception:
+        return pdf_bytes, None
+    finally:
+        doc.close()
+
+
 
 # ── FECHA Y AÑO PARA ORDENAR Y FILTRAR (no afecta la búsqueda) ─
 _RE_ANIO = re.compile(r"(?<!\d)(19[89]\d|20\d{2})(?!\d)")
@@ -1514,13 +1545,64 @@ def ver_pdf(empresa=None, token=None, user=None):
     try:
         marked_bytes, found = annotate_pdf_bytes(pdf_bytes, codigo, mode=MODO_DOC[tipo_doc])
     except Exception:
-        marked_bytes = pdf_bytes
+        marked_bytes, found = pdf_bytes, False
+
+    # Abrir directamente en la página del primer resaltado
+    pagina = None
+    if found:
+        marked_bytes, pagina = ir_a_pagina_resaltada(marked_bytes)
+    if pagina and pagina > 1:
+        # El navegador salta a la página con "#page=N"; para eso el PDF se sirve desde
+        # un enlace corto (se guarda unos minutos en memoria) que lleva ese número.
+        clave = _guardar_pdf_listo(marked_bytes, token)
+        return redirect(url_for("pdf_listo", clave=clave, token=token,
+                                drive_id=drive_id, codigo=codigo) + f"#page={pagina}")
 
     return send_file(
         io.BytesIO(marked_bytes),
         mimetype="application/pdf",
         as_attachment=False,
         download_name=f"PDFocus_{codigo}.pdf",
+    )
+
+
+# PDFs ya marcados, guardados unos minutos para abrirlos en la página correcta
+_PDF_LISTOS = {}                     # clave -> (bytes, momento, token)
+_PDF_LISTOS_LOCK = threading.Lock()
+_PDF_LISTOS_TTL = 300                # segundos
+_PDF_LISTOS_MAX = 40 * 1024 * 1024   # máximo 40 MB en total, para cuidar la memoria
+
+
+def _guardar_pdf_listo(datos, token):
+    clave = secrets.token_urlsafe(12)
+    ahora = time.time()
+    with _PDF_LISTOS_LOCK:
+        for k, (_b, ts, _t) in list(_PDF_LISTOS.items()):
+            if ahora - ts > _PDF_LISTOS_TTL:
+                del _PDF_LISTOS[k]
+        total = sum(len(v[0]) for v in _PDF_LISTOS.values())
+        while _PDF_LISTOS and total + len(datos) > _PDF_LISTOS_MAX:
+            mas_viejo = min(_PDF_LISTOS, key=lambda k: _PDF_LISTOS[k][1])
+            total -= len(_PDF_LISTOS.pop(mas_viejo)[0])
+        _PDF_LISTOS[clave] = (datos, ahora, token)
+    return clave
+
+
+@app.route("/pdf/<clave>")
+@require_token
+def pdf_listo(clave, empresa=None, token=None, user=None):
+    with _PDF_LISTOS_LOCK:
+        entrada = _PDF_LISTOS.get(clave)
+    codigo = request.args.get("codigo", "").strip()
+    if not entrada or entrada[2] != token or time.time() - entrada[1] > _PDF_LISTOS_TTL:
+        # Enlace vencido (o de otra empresa): se vuelve a generar el PDF marcado
+        return redirect(url_for("ver_pdf", token=token, drive_id=request.args.get("drive_id", ""),
+                                codigo=codigo))
+    return send_file(
+        io.BytesIO(entrada[0]),
+        mimetype="application/pdf",
+        as_attachment=False,
+        download_name=f"PDFocus_{codigo or 'documento'}.pdf",
     )
 
 
