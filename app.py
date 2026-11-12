@@ -434,9 +434,20 @@ def _celda(row, i):
     return row[i].strip() if len(row) > i and row[i] else ""
 
 
+def _leer_subcarpetas(texto):
+    """Columna J (JSON): {"manifiestos": ["MR CAPS", "RELOJ"], ...}. Vacío o inválido = todas."""
+    if not texto:
+        return {}
+    try:
+        d = json.loads(texto)
+        return {t: [str(x) for x in v] for t, v in d.items() if t in TIPOS_DOC and isinstance(v, list) and v}
+    except Exception:
+        return {}
+
+
 def _load_users_from_sheets():
     try:
-        result = _sheets_get("usuarios_pdfocus!A2:I1000")
+        result = _sheets_get("usuarios_pdfocus!A2:J1000")
         rows = result.get("values", [])
         users = {}
         for row in rows:
@@ -460,6 +471,8 @@ def _load_users_from_sheets():
                     "facturas":    _celda(row, 7),
                     "otros":       _celda(row, 8),
                 },
+                # Columna J: subcarpetas que puede ver, por tipo. Vacío = todas.
+                "subcarpetas": _leer_subcarpetas(_celda(row, 9)),
             }
         return users
     except Exception as e:
@@ -544,13 +557,15 @@ def _add_user_to_sheets(empresa, token, tipo=PERFIL_EMPRESA, carpetas=None):
         return False
 
 
-def _set_user_carpetas(token, carpetas):
+def _set_user_carpetas(token, carpetas, subcarpetas=None):
     try:
         fila = _fila_de_token(token)
         if not fila:
             return False
-        _sheets_update(f"usuarios_pdfocus!G{fila}:I{fila}", [[
+        subs = {t: v for t, v in (subcarpetas or {}).items() if t in TIPOS_DOC and v and carpetas.get(t)}
+        _sheets_update(f"usuarios_pdfocus!G{fila}:J{fila}", [[
             carpetas.get("manifiestos", ""), carpetas.get("facturas", ""), carpetas.get("otros", ""),
+            json.dumps(subs, ensure_ascii=False) if subs else "",
         ]])
         _reload_users_sync()
         return True
@@ -623,6 +638,9 @@ def _asegurar_encabezados_usuarios():
             _sheets_update("usuarios_pdfocus!F1:I1", [[
                 "tipo", "carpeta_manifiestos", "carpeta_facturas", "carpeta_otros"
             ]])
+        r = _sheets_get("usuarios_pdfocus!J1")
+        if not r.get("values"):
+            _sheets_update("usuarios_pdfocus!J1", [["subcarpetas"]])
     except Exception as e:
         print(f"[SHEETS] No se pudieron escribir encabezados: {e}", flush=True)
 
@@ -710,6 +728,18 @@ def _mapa_carpetas(users=None):
                 m = mapa.setdefault(fid, {"tipo": t, "duenos": set()})
                 m["duenos"].add("UNIVERSAL" if u.get("tipo") == PERFIL_UNIVERSAL else u.get("empresa", ""))
     return mapa
+
+
+def _ruta_permitida(u, tipo_doc, ruta):
+    """¿Este perfil puede ver un PDF en esta ruta? Si el perfil tiene subcarpetas elegidas
+    para ese tipo, solo ve los PDFs que estén dentro de ellas (por su primera subcarpeta).
+    Sin selección (o perfil GENERAL) ve todo. La carpeta se indexa una sola vez para todos."""
+    if u.get("tipo") == PERFIL_GENERAL:
+        return True
+    subs = (u.get("subcarpetas") or {}).get(tipo_doc)
+    if not subs:
+        return True
+    return (ruta or "").split("/")[0] in subs
 
 
 def _carpetas_de_usuario(u, users=None):
@@ -1548,6 +1578,8 @@ def buscar(empresa=None, token=None, user=None):
             for file_id, info in index_data.items():
                 if file_id in vistos:
                     continue
+                if not _ruta_permitida(user, t, info.get("ruta", "")):
+                    continue
                 compact = info["compact"]
                 if isinstance(compact, bytes):
                     compact = _decompress_compact(compact)
@@ -1638,6 +1670,8 @@ def buscar_lista(empresa=None, token=None, user=None):
                 pendientes = [(r, rn) for r, rn in normas if file_id not in vistos[r]]
                 if not pendientes:
                     continue
+                if not _ruta_permitida(user, t, info.get("ruta", "")):
+                    continue
                 compact = info["compact"]
                 if isinstance(compact, bytes):
                     compact = _decompress_compact(compact)
@@ -1678,8 +1712,9 @@ def _carpeta_del_archivo(user, drive_id):
     for t, fids in _carpetas_de_usuario(user).items():
         for fid in fids:
             with _INDEX_LOCK:
-                if drive_id in _INDEX_CACHE.get(fid, {}):
-                    return fid, t
+                info = _INDEX_CACHE.get(fid, {}).get(drive_id)
+            if info is not None and _ruta_permitida(user, t, info.get("ruta", "")):
+                return fid, t
     return None
 
 
@@ -1811,7 +1846,11 @@ def admin_panel():
         for token, u in users.items():
             conteo = {}
             for t, fids in _carpetas_de_usuario(u, users).items():
-                conteo[t] = sum(len(_INDEX_CACHE.get(fid, {})) for fid in fids)
+                if (u.get("subcarpetas") or {}).get(t) and u.get("tipo") != PERFIL_GENERAL:
+                    conteo[t] = sum(1 for fid in fids for info in _INDEX_CACHE.get(fid, {}).values()
+                                    if _ruta_permitida(u, t, info.get("ruta", "")))
+                else:
+                    conteo[t] = sum(len(_INDEX_CACHE.get(fid, {})) for fid in fids)
             filas[token] = dict(u, conteo=conteo, legado=_usa_legado(u))
     orden = {PERFIL_GENERAL: 0, PERFIL_UNIVERSAL: 1, PERFIL_EMPRESA: 2}
     filas = dict(sorted(filas.items(), key=lambda kv: (orden.get(kv[1]["tipo"], 9),
@@ -1903,12 +1942,52 @@ def admin_carpetas():
     except Exception as e:
         return jsonify({"error": f"No se pudieron crear las carpetas en Drive: {e}"}), 500
 
-    if not _set_user_carpetas(token, nuevas):
+    subs = data.get("subcarpetas") or {}
+    subs = {t: [str(x) for x in v] for t, v in subs.items()
+            if t in TIPOS_DOC and isinstance(v, list) and v and nuevas.get(t)}
+    if not _set_user_carpetas(token, nuevas, subs):
         return jsonify({"error": "No se pudo guardar en Sheets"}), 500
     fids = [fid for fid in nuevas.values() if fid]
     if fids:
         _indexar_carpetas_en_background(fids)
     return jsonify({"ok": True, "carpetas": nuevas})
+
+
+@app.route("/admin/subcarpetas")
+def admin_subcarpetas():
+    """Subcarpetas (primer nivel) de una carpeta de Drive, con cuántos PDFs indexados tiene cada una."""
+    if not _check_admin():
+        return jsonify({"error": "No autorizado"}), 401
+    fid = _id_de_link(request.args.get("carpeta", ""))
+    if not fid:
+        return jsonify({"error": "Primero pega el link de la carpeta."}), 400
+    try:
+        subs, pt = [], None
+        while True:
+            params = {
+                "q": f"'{fid}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false",
+                "fields": "nextPageToken, files(id, name)",
+                "pageSize": 1000,
+            }
+            if pt:
+                params["pageToken"] = pt
+            r = _drive_get("files", params)
+            subs.extend(f.get("name", "") for f in r.get("files", []))
+            pt = r.get("nextPageToken")
+            if not pt:
+                break
+    except Exception as e:
+        return jsonify({"error": f"No se pudo leer la carpeta en Drive: {e}"}), 500
+    conteo, sueltos = {}, 0
+    with _INDEX_LOCK:
+        for info in _INDEX_CACHE.get(fid, {}).values():
+            primera = (info.get("ruta") or "").split("/")[0]
+            if primera:
+                conteo[primera] = conteo.get(primera, 0) + 1
+            else:
+                sueltos += 1
+    lista = [{"nombre": n, "pdfs": conteo.get(n, 0)} for n in sorted(set(subs), key=str.lower)]
+    return jsonify({"subcarpetas": lista, "sueltos": sueltos, "indexada": fid in _INDEX_CACHE})
 
 
 @app.route("/admin/actualizar_empresa", methods=["POST"])
