@@ -367,6 +367,134 @@
       font-size: 0.88rem;
     }
 
+    /* ── MODO: UNA / LISTA ── */
+    .card-top {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-bottom: 4px;
+    }
+    .modo-row {
+      display: inline-flex;
+      background: var(--bg);
+      border: 1.5px solid var(--border);
+      border-radius: 20px;
+      padding: 2px;
+    }
+    .modo-btn {
+      font-family: inherit;
+      font-size: 0.75rem;
+      font-weight: 600;
+      border: none;
+      background: transparent;
+      color: var(--fg2);
+      padding: 5px 12px;
+      border-radius: 16px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .modo-btn.active { background: var(--surface); color: var(--accent); box-shadow: 0 1px 3px rgba(0,0,0,0.10); }
+    .lista-box { display: none; }
+    .modo-lista .lista-box { display: block; }
+    .modo-lista .search-row { display: none; }
+    textarea#lista {
+      width: 100%;
+      min-height: 120px;
+      resize: vertical;
+      border: 1.5px solid var(--border);
+      border-radius: 10px;
+      padding: 10px 14px;
+      font-size: 0.92rem;
+      font-family: inherit;
+      color: var(--fg);
+      background: var(--bg);
+      line-height: 1.5;
+    }
+    textarea#lista:focus { outline: none; border-color: var(--accent); background: #fff; }
+    .lista-pie {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-top: 10px;
+      flex-wrap: wrap;
+    }
+    .lista-cuenta { font-size: 0.8rem; font-weight: 600; color: var(--fg2); }
+    .lista-cuenta.excede { color: #b91c1c; }
+    .lista-pie .acciones { margin-left: auto; display: flex; gap: 8px; }
+    .btn-ghost {
+      background: transparent;
+      color: var(--fg2);
+      border: 1.5px solid var(--border);
+      border-radius: 10px;
+      padding: 10px 14px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      font-family: inherit;
+      cursor: pointer;
+    }
+    .btn-ghost:hover { border-color: var(--fg2); color: var(--fg); }
+
+    /* Resultados de la lista */
+    .resumen-lista {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 12px 16px;
+      display: flex;
+      gap: 8px 16px;
+      flex-wrap: wrap;
+      font-size: 0.84rem;
+      font-weight: 600;
+    }
+    .resumen-lista .ok { color: var(--green); }
+    .resumen-lista .no { color: #b91c1c; }
+    .resumen-lista .tot { color: var(--fg2); font-weight: 500; }
+    .no-encontradas {
+      background: #fef2f2;
+      border: 1px solid #fecaca;
+      border-radius: 12px;
+      padding: 12px 16px;
+    }
+    .no-encontradas h3 {
+      font-size: 0.78rem;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: #b91c1c;
+      margin-bottom: 8px;
+    }
+    .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+    .chip {
+      font-size: 0.8rem;
+      font-weight: 600;
+      background: #fff;
+      border: 1px solid #fecaca;
+      color: #b91c1c;
+      border-radius: 8px;
+      padding: 3px 9px;
+    }
+    .vista-row { margin-left: auto; }
+    .res-tambien {
+      font-size: 0.72rem;
+      color: #b45309;
+      margin-top: 3px;
+      font-weight: 600;
+    }
+    .ref-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+    .ref-chip {
+      font-size: 0.7rem;
+      font-weight: 700;
+      color: var(--accent);
+      background: #eef3ff;
+      border-radius: 6px;
+      padding: 1px 7px;
+    }
+    .grupo.ref > summary { text-transform: none; letter-spacing: 0; font-size: 0.88rem; color: var(--fg); }
+    .grupo.ref > summary .ref-ok { color: var(--green); }
+    .grupo.ref > summary .ref-det { color: var(--fg2); font-weight: 500; font-size: 0.74rem; }
+
     /* ── FOOTER ── */
     footer {
       text-align: center;
@@ -382,6 +510,8 @@
       .search-card { padding: 24px 18px; }
       .search-row { flex-direction: column; }
       .btn-search { width: 100%; justify-content: center; display: flex; }
+      .lista-pie .acciones { margin-left: 0; width: 100%; }
+      .lista-pie .acciones .btn-search { flex: 1; }
     }
   </style>
 </head>
@@ -399,13 +529,30 @@
 </header>
 
 <main>
-  <div class="search-card">
-    <h1>Buscar referencia</h1>
-    <p>Ingresa el código o referencia a localizar en los documentos.</p>
+  <div class="search-card" id="card">
+    <div class="card-top">
+      <h1 id="titulo">Buscar referencia</h1>
+      <div class="modo-row">
+        <button class="modo-btn active" data-modo="una" onclick="setModo('una')">Una referencia</button>
+        <button class="modo-btn" data-modo="lista" onclick="setModo('lista')">Lista</button>
+      </div>
+    </div>
+    <p id="subtitulo">Ingresa el código o referencia a localizar en los documentos.</p>
 
     <div class="search-row">
       <input type="text" id="codigo" placeholder="Ej: S-644WJ, 20250915..." autocomplete="off" autocorrect="off" spellcheck="false">
       <button class="btn-search" id="btn-buscar" onclick="buscar()">Buscar</button>
+    </div>
+
+    <div class="lista-box">
+      <textarea id="lista" placeholder="Una referencia por renglón, o separadas por coma.&#10;Ej:&#10;S-644WJ&#10;K-812L&#10;GPD9248" spellcheck="false" autocomplete="off"></textarea>
+      <div class="lista-pie">
+        <span class="lista-cuenta" id="lista-cuenta">0 de {{ max_lista }} referencias</span>
+        <div class="acciones">
+          <button class="btn-ghost" onclick="limpiarLista()">✕ Limpiar</button>
+          <button class="btn-search" id="btn-lista" onclick="buscarLista()">Buscar lista</button>
+        </div>
+      </div>
     </div>
 
     <div class="filtros-row">
@@ -438,6 +585,11 @@
   let ultimos = [];        // resultados de la última búsqueda
   let ultimoCodigo = "";
 
+  const MAX_LISTA = {{ max_lista }};
+  let modo = "una";
+  let ultimaLista = null;  // [{ref, resultados}] de la última búsqueda por lista
+  let vistaLista = "ref";  // "ref" = por referencia · "doc" = por documento
+
   const GRUPOS = [
     { tipo: "manifesto", nombre: "Manifiestos",      icono: "📋", clase: "manifesto", porCarpeta: false },
     { tipo: "factura",   nombre: "Facturas",         icono: "🧾", clase: "factura",   porCarpeta: false },
@@ -449,7 +601,178 @@
     btn.classList.add("active");
     tipoActivo = btn.dataset.tipo;
     // Si ya hay algo escrito, busca de nuevo con el filtro elegido
+    if (modo === "lista") { if (ultimaLista) buscarLista(); return; }
     if (document.getElementById("codigo").value.trim() && ultimoCodigo) buscar();
+  }
+
+  // ── MODO: UNA REFERENCIA / LISTA ──
+  function setModo(m) {
+    if (m === modo) return;
+    modo = m;
+    document.querySelectorAll(".modo-btn").forEach(b => b.classList.toggle("active", b.dataset.modo === m));
+    document.getElementById("card").classList.toggle("modo-lista", m === "lista");
+    document.getElementById("titulo").textContent = m === "lista" ? "Buscar lista de referencias" : "Buscar referencia";
+    document.getElementById("subtitulo").textContent = m === "lista"
+      ? `Pega hasta ${MAX_LISTA} referencias, una por renglón o separadas por coma (puedes copiarlas de Excel).`
+      : "Ingresa el código o referencia a localizar en los documentos.";
+    ultimos = []; ultimoCodigo = ""; ultimaLista = null;
+    document.getElementById("estado").textContent = "";
+    llenarAnios();
+    pintar();
+    (m === "lista" ? document.getElementById("lista") : document.getElementById("codigo")).focus();
+    if (m === "lista") contarLista();
+  }
+
+  // Misma separación que el servidor: Enter, coma, punto y coma o tabulación; sin repetidas
+  function leerLista() {
+    const vistos = new Set(), refs = [];
+    document.getElementById("lista").value.split(/[,;\t\r\n]+/).forEach(r => {
+      r = r.trim();
+      const n = r.replace(/[^0-9A-Za-zÀ-ÿ]/g, "");
+      if (!r || !n || vistos.has(n)) return;
+      vistos.add(n); refs.push(r);
+    });
+    return refs;
+  }
+
+  function contarLista() {
+    const n = leerLista().length;
+    const el = document.getElementById("lista-cuenta");
+    el.textContent = n > MAX_LISTA
+      ? `${n} referencias — máximo ${MAX_LISTA}. Divide la lista en grupos de ${MAX_LISTA}.`
+      : `${n} de ${MAX_LISTA} referencias`;
+    el.classList.toggle("excede", n > MAX_LISTA);
+    document.getElementById("btn-lista").disabled = n === 0 || n > MAX_LISTA;
+    return n;
+  }
+  document.getElementById("lista").addEventListener("input", contarLista);
+  document.getElementById("lista").addEventListener("keydown", e => {
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); buscarLista(); }
+  });
+
+  function limpiarLista() {
+    document.getElementById("lista").value = "";
+    ultimaLista = null; ultimos = [];
+    document.getElementById("estado").textContent = "";
+    llenarAnios(); pintar(); contarLista();
+    document.getElementById("lista").focus();
+  }
+
+  async function buscarLista() {
+    const n = contarLista();
+    if (!n || n > MAX_LISTA) return;
+    const btn = document.getElementById("btn-lista");
+    const estado = document.getElementById("estado");
+    const resultados = document.getElementById("resultados");
+    btn.disabled = true;
+    estado.textContent = `Buscando ${n} referencia${n > 1 ? "s" : ""}…`;
+    resultados.innerHTML = "";
+    try {
+      const resp = await fetch("/buscar_lista?token=" + TOKEN, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ referencias: document.getElementById("lista").value, tipo: tipoActivo }),
+      });
+      let data;
+      try { data = await resp.json(); }
+      catch (e) { data = { error: "Tu sesión se cerró. Ingresa de nuevo con tu contraseña.", relogin: true }; }
+      estado.textContent = "";
+      if (data.relogin) {
+        resultados.innerHTML = `<div class="msg-error">${escHtml(data.error)}
+          <div style="margin-top:10px"><a class="btn-search" style="display:inline-block;text-decoration:none"
+            href="/?token=${encodeURIComponent(TOKEN)}">Ingresar de nuevo</a></div></div>`;
+        return;
+      }
+      if (data.error) {
+        resultados.innerHTML = `<div class="msg-error">${escHtml(data.error)}</div>`;
+        return;
+      }
+      ultimaLista = data.lista || [];
+      ultimos = ultimaLista.flatMap(x => x.resultados);
+      llenarAnios();
+      pintar();
+    } catch (err) {
+      resultados.innerHTML = `<div class="msg-error">Error de conexión. Intenta de nuevo.</div>`;
+      estado.textContent = "";
+    } finally {
+      contarLista();
+    }
+  }
+
+  function setVista(v) { vistaLista = v; pintarLista(); }
+
+  const ORDEN_TIPO = { manifesto: 0, factura: 1, otros: 2 };
+  const grupoDe = r => GRUPOS.find(g => g.tipo === (r.tipo === "manifiestos" ? "manifesto" : r.tipo)) || GRUPOS[2];
+
+  function pintarLista() {
+    const resultados = document.getElementById("resultados");
+    if (!ultimaLista) { resultados.innerHTML = ""; return; }
+    const anio = document.getElementById("anio").value;
+    const encontradas = [], vacias = [];
+    ultimaLista.forEach(x => {
+      const docs = x.resultados.filter(r => !anio || r.anio === anio);
+      (docs.length ? encontradas : vacias).push({ ref: x.ref, docs });
+    });
+    const ndocs = new Set(encontradas.flatMap(x => x.docs.map(r => r.drive_id))).size;  // sin contar repetidos
+
+    let html = `<div class="resumen-lista">
+      <span>${ultimaLista.length} referencia${ultimaLista.length !== 1 ? "s" : ""}${anio ? " · " + anio : ""}</span>
+      <span class="ok">✔ ${encontradas.length} encontrada${encontradas.length !== 1 ? "s" : ""}</span>
+      ${vacias.length ? `<span class="no">✖ ${vacias.length} no encontrada${vacias.length !== 1 ? "s" : ""}</span>` : ""}
+      <span class="tot">${ndocs} documento${ndocs !== 1 ? "s" : ""}</span>
+      ${encontradas.length ? `<div class="modo-row vista-row">
+        <button class="modo-btn${vistaLista === "ref" ? " active" : ""}" onclick="setVista('ref')">Por referencia</button>
+        <button class="modo-btn${vistaLista === "doc" ? " active" : ""}" onclick="setVista('doc')">Por documento</button>
+      </div>` : ""}
+    </div>`;
+
+    if (vacias.length) {
+      html += `<div class="no-encontradas"><h3>${anio ? "Sin resultados en " + anio : "No encontradas"} (${vacias.length})</h3>
+        <div class="chips">${vacias.map(v => `<span class="chip">${escHtml(v.ref)}</span>`).join("")}</div></div>`;
+    }
+
+    // Qué referencias de la lista contiene cada documento (en el orden de la lista)
+    const refsDe = new Map(), docDe = new Map();
+    encontradas.forEach(x => x.docs.forEach(r => {
+      if (!refsDe.has(r.drive_id)) { refsDe.set(r.drive_id, []); docDe.set(r.drive_id, r); }
+      refsDe.get(r.drive_id).push(x.ref);
+    }));
+
+    if (vistaLista === "doc") {
+      // Cada documento UNA sola vez, con todas las referencias que contiene
+      const unicos = [...docDe.values()];
+      const porGrupo = GRUPOS.map(g => ({ g, docs: unicos.filter(r => grupoDe(r).tipo === g.tipo) })).filter(x => x.docs.length);
+      porGrupo.forEach(({ g, docs }) => {
+        html += `<details class="grupo" open><summary>${g.icono} ${g.nombre}<span class="cnt">${docs.length}</span></summary><div class="grupo-lista">`;
+        [...docs].sort((a, b) => cmpFecha(a.fecha || [], b.fecha || [])).forEach(r => {
+          const refs = refsDe.get(r.drive_id);
+          const chips = `<div class="ref-chips">${refs.map(x => `<span class="ref-chip">${escHtml(x)}</span>`).join("")}</div>`;
+          html += tarjeta(r, g, true, false, refs[0], chips, refs);
+        });
+        html += `</div></details>`;
+      });
+      resultados.innerHTML = html;
+      return;
+    }
+
+    const abrirTodas = encontradas.length <= 5;
+    encontradas.forEach((x, i) => {
+      const conteo = {};
+      x.docs.forEach(r => { const g = grupoDe(r); conteo[g.tipo] = (conteo[g.tipo] || 0) + 1; });
+      const det = GRUPOS.filter(g => conteo[g.tipo]).map(g => `${g.icono} ${conteo[g.tipo]}`).join("  ");
+      html += `<details class="grupo ref"${abrirTodas || i === 0 ? " open" : ""}>
+        <summary><span class="ref-ok">✔</span> ${escHtml(x.ref)} <span class="ref-det">${det}</span><span class="cnt">${x.docs.length}</span></summary>
+        <div class="grupo-lista">`;
+      [...x.docs].sort((a, b) => (ORDEN_TIPO[grupoDe(a).tipo] - ORDEN_TIPO[grupoDe(b).tipo]) || cmpFecha(a.fecha || [], b.fecha || []))
+        .forEach(r => {
+          const otras = refsDe.get(r.drive_id).filter(o => o !== x.ref);
+          const tambien = otras.length ? `<div class="res-tambien">También contiene: ${otras.map(escHtml).join(", ")}</div>` : "";
+          // Subraya todas las referencias de la lista que tiene; abre en la del grupo
+          html += tarjeta(r, grupoDe(r), true, false, x.ref, tambien, [x.ref, ...otras], true);
+        });
+      html += `</div></details>`;
+    });
+    resultados.innerHTML = html;
   }
 
   document.getElementById("codigo").addEventListener("keydown", e => {
@@ -514,8 +837,12 @@
     return 0;
   };
 
-  function tarjeta(r, ui, mostrarCarpeta, enCarpeta) {
-    const url = `/ver_pdf?drive_id=${encodeURIComponent(r.drive_id)}&codigo=${encodeURIComponent(ultimoCodigo)}&tipo=${encodeURIComponent(r.tipo)}&token=${TOKEN}`;
+  function tarjeta(r, ui, mostrarCarpeta, enCarpeta, codigo, extraHtml, codigos, abrirEnRef) {
+    let url = `/ver_pdf?drive_id=${encodeURIComponent(r.drive_id)}&codigo=${encodeURIComponent(codigo || ultimoCodigo)}&tipo=${encodeURIComponent(r.tipo)}&token=${TOKEN}`;
+    if (codigos && codigos.length > 1) {
+      url += `&codigos=${encodeURIComponent(codigos.join("\n"))}`;
+      if (abrirEnRef) url += "&abrir=ref";
+    }
     const emp = r.empresa ? `<span class="res-empresa">${escHtml(r.empresa)}</span>` : "";
     const carpeta = mostrarCarpeta && r.ruta
       ? `<div class="res-carpeta">📂 ${escHtml(r.ruta.replace(/\//g, " › "))}${emp}</div>`
@@ -526,12 +853,14 @@
         <div class="res-info">
           <div class="res-nombre">${escHtml(r.nombre)}</div>
           ${carpeta}
+          ${extraHtml || ""}
         </div>
         <div class="res-arrow">›</div>
       </a>`;
   }
 
   function pintar() {
+    if (modo === "lista") { pintarLista(); return; }
     const resultados = document.getElementById("resultados");
     if (!ultimoCodigo) { resultados.innerHTML = ""; return; }
     const anio = document.getElementById("anio").value;
