@@ -1112,6 +1112,69 @@ def annotate_pdf_bytes(pdf_bytes, ref_raw, mode="manifesto"):
     out.seek(0)
     return out.read(), found
 
+def _resaltados_por_pagina(pdf_bytes):
+    """Cantidad de resaltados en cada página (para saber dónde quedó cada referencia)."""
+    try:
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    except Exception:
+        return []
+    try:
+        return [len(list(doc.load_page(i).annots(types=[fitz.PDF_ANNOT_HIGHLIGHT])))
+                for i in range(len(doc))]
+    except Exception:
+        return []
+    finally:
+        doc.close()
+
+
+def _guia_de_referencias(pdf_bytes, paginas_por_ref, abrir_en_primera_ref=False):
+    """Cuando un PDF se abre con varias referencias subrayadas (vista Por documento):
+    - agrega marcadores (índice del PDF) "REF — pág. N" para saltar a cada una;
+    - pone una nota pequeña arriba de la primera página resaltada con el resumen
+      "K-812L: pág. 1 · A-100: pág. 3", y hace que el PDF abra arriba de esa página
+    para que la nota se vea.
+    No toca el contenido ni el resaltado. Devuelve (bytes_del_pdf, página_inicial o None)."""
+    con_pag = [(r, ps) for r, ps in paginas_por_ref if ps]
+    if not con_pag:
+        return pdf_bytes, None
+    try:
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    except Exception:
+        return pdf_bytes, None
+    try:
+        toc = []
+        for ref, ps in con_pag:
+            toc.append([1, f"{ref} — pág. {', '.join(str(p) for p in ps)}", ps[0]])
+        try:
+            doc.set_toc(toc)
+            doc.xref_set_key(doc.pdf_catalog(), "PageMode", "/UseOutlines")
+        except Exception:
+            pass
+        if abrir_en_primera_ref and paginas_por_ref and paginas_por_ref[0][1]:
+            primera = paginas_por_ref[0][1][0]     # hoja de la referencia donde se dio clic
+        else:
+            primera = min(ps[0] for _r, ps in con_pag)
+        pg = doc.load_page(primera - 1)
+        texto = "PDFocus:  " + "   ·   ".join(
+            f"{r}: pág. {', '.join(str(p) for p in ps)}" for r, ps in con_pag)
+        ancho = pg.rect.width
+        fs = max(7, min(10, ancho / 75))
+        caja = fitz.Rect(18, 6, ancho - 18, 6 + fs * 2.2)
+        nota = pg.add_freetext_annot(caja, texto, fontsize=fs, fontname="helv",
+                                     text_color=(0.05, 0.25, 0.65), fill_color=(1, 0.97, 0.80))
+        nota.set_info(title="PDFocus")
+        nota.update()
+        if primera > 1:
+            arriba = fitz.Point(0, 0) * ~pg.transformation_matrix
+            doc.xref_set_key(doc.pdf_catalog(), "OpenAction",
+                             f"[{pg.xref} 0 R /XYZ null {arriba.y:.1f} null]")
+        return doc.tobytes(garbage=1), primera
+    except Exception:
+        return pdf_bytes, None
+    finally:
+        doc.close()
+
+
 def ir_a_pagina_resaltada(pdf_bytes):
     """
     Revisa en qué página quedó el PRIMER resaltado y le agrega al PDF la instrucción
@@ -1250,9 +1313,12 @@ def update_index_incremental(folder_id, section_key):
         fid = f["id"]
         mod = f.get("modifiedTime", "")
         if fid in current and current[fid].get("modified_time") == mod:
-            # Sin cambios en el PDF: solo se completa/actualiza la ruta (sin descargar nada)
-            if current[fid].get("ruta") != f.get("ruta", ""):
-                current[fid] = dict(current[fid], ruta=f.get("ruta", ""))
+            # Sin cambios en el contenido: solo se actualizan la carpeta (ruta) y el
+            # NOMBRE, por si lo movieron o renombraron en Drive (sin descargar nada)
+            if (current[fid].get("ruta") != f.get("ruta", "")
+                    or current[fid].get("name") != f.get("name", current[fid].get("name"))):
+                current[fid] = dict(current[fid], ruta=f.get("ruta", ""),
+                                    name=f.get("name", current[fid].get("name")))
                 rutas += 1
             continue
         try:
@@ -1350,7 +1416,7 @@ def require_token(f):
         user_info = _validate_token(token)
         # Las búsquedas se hacen desde JavaScript: en vez de redirigir a otra página,
         # se responde un error claro para que el buscador pida ingresar de nuevo.
-        es_api = request.method == "POST" and request.path == "/buscar"
+        es_api = request.method == "POST" and request.path in ("/buscar", "/buscar_lista")
         if not user_info:
             if es_api:
                 return jsonify({"error": "Tu acceso no es válido o fue desactivado.", "relogin": True}), 401
@@ -1446,7 +1512,7 @@ def index(empresa=None, token=None, user=None):
     tipos = _tipos_de_usuario(user)
     resp = make_response(render_template(
         "index.html", empresa=empresa, token=token,
-        perfil=user.get("tipo", PERFIL_EMPRESA), tipos=tipos,
+        perfil=user.get("tipo", PERFIL_EMPRESA), tipos=tipos, max_lista=MAX_LISTA,
     ))
     resp.set_cookie("pdfocus_token", token, max_age=60 * 60 * 24 * 30)
     return resp
@@ -1513,6 +1579,100 @@ def buscar(empresa=None, token=None, user=None):
     return jsonify({"resultados": resultados})
 
 
+# ── BÚSQUEDA POR LISTA ────────────────────────────────────────
+MAX_LISTA = 20   # máximo de referencias por búsqueda (para cuidar el servidor)
+
+
+def _leer_lista_referencias(texto):
+    """Separa por Enter, coma, punto y coma o tabulación (sirve pegar desde Excel).
+    Quita repetidas (las que quedan iguales al normalizar)."""
+    refs, vistos = [], set()
+    for r in re.split(r"[,;\t\r\n]+", texto or ""):
+        r = r.strip()
+        if not r:
+            continue
+        n = normalize_compact(r)
+        if not n or n in vistos:
+            continue
+        vistos.add(n)
+        refs.append(r)
+    return refs
+
+
+@app.route("/buscar_lista", methods=["POST"])
+@require_token
+def buscar_lista(empresa=None, token=None, user=None):
+    """Busca varias referencias con EXACTAMENTE la misma regla de /buscar.
+    Cada documento se descomprime una sola vez y se revisa contra todas las referencias."""
+    data  = request.get_json() or {}
+    texto = data.get("referencias") or ""
+    if isinstance(texto, list):
+        texto = "\n".join(str(x) for x in texto)
+    tipo  = (data.get("tipo") or "ambos").lower()
+
+    refs = _leer_lista_referencias(texto)
+    if not refs:
+        return jsonify({"error": "Pega al menos una referencia."}), 400
+    if len(refs) > MAX_LISTA:
+        return jsonify({"error": f"Máximo {MAX_LISTA} referencias por búsqueda. "
+                                 f"Pegaste {len(refs)}: divide la lista en grupos de {MAX_LISTA}."}), 400
+
+    normas = [(r, normalize_compact(r)) for r in refs]
+    res = {r: [] for r in refs}
+    vistos = {r: set() for r in refs}
+
+    users = _users_snapshot()
+    carpetas = _carpetas_de_usuario(user, users)
+    es_general = user.get("tipo") == PERFIL_GENERAL
+    duenos = {fid: m["duenos"] for fid, m in _mapa_carpetas(users).items()} if es_general else {}
+
+    permitidos = _tipos_de_usuario(user)
+    tipos = permitidos if tipo in ("ambos", "todos") else [t for t in permitidos if t == tipo]
+
+    for t in tipos:
+        for folder_id in carpetas.get(t, []):
+            ensure_index(folder_id, folder_id)
+            with _INDEX_LOCK:
+                index_data = dict(_INDEX_CACHE.get(folder_id, {}))
+            for file_id, info in index_data.items():
+                pendientes = [(r, rn) for r, rn in normas if file_id not in vistos[r]]
+                if not pendientes:
+                    continue
+                compact = info["compact"]
+                if isinstance(compact, bytes):
+                    compact = _decompress_compact(compact)
+                item = None
+                for ref, ref_norm in pendientes:
+                    encontrado = ref_in_text_safe(ref_norm, compact)
+                    if not encontrado and MODO_DOC[t] == "manifesto":
+                        encontrado = ref_in_text_nojoin(ref_norm, compact)
+                    if not encontrado:
+                        continue
+                    vistos[ref].add(file_id)
+                    if item is None:
+                        ruta = info.get("ruta", "")
+                        f_doc = _fecha_valida(info["name"])
+                        f_carp = _fecha_carpeta(ruta)
+                        item = {
+                            "nombre":   info["name"],
+                            "tipo":     "otros" if t == "otros" else MODO_DOC[t],
+                            "drive_id": file_id,
+                            "ruta":     ruta,
+                            "anio":     _anio_doc(ruta, info["name"]),
+                            "fecha":    list(f_doc if f_doc != (0, 0, 0) else f_carp),
+                            "fecha_carpeta": list(f_carp),
+                        }
+                        if es_general:
+                            item["empresa"] = " / ".join(sorted(duenos.get(folder_id, []))) or ""
+                    res[ref].append(item)
+
+    lista = []
+    for r in refs:
+        docs = sorted(res[r], key=lambda x: tuple(x["fecha"]), reverse=True)
+        lista.append({"ref": r, "resultados": docs})
+    return jsonify({"lista": lista, "max": MAX_LISTA})
+
+
 def _carpeta_del_archivo(user, drive_id):
     """Devuelve (folder_id, tipo_doc) si el archivo está en una carpeta permitida; si no, None."""
     for t, fids in _carpetas_de_usuario(user).items():
@@ -1528,8 +1688,14 @@ def _carpeta_del_archivo(user, drive_id):
 def ver_pdf(empresa=None, token=None, user=None):
     drive_id = request.args.get("drive_id", "")
     codigo   = request.args.get("codigo", "").strip()
+    # Vista "Por documento" de la lista: varias referencias para subrayar en el mismo PDF
+    codigos_txt = request.args.get("codigos", "")
+    refs = [c.strip() for c in codigos_txt.split("\n") if c.strip()][:MAX_LISTA] if codigos_txt else []
+    if not refs and codigo:
+        refs = [codigo]
+    codigo = codigo or (refs[0] if refs else "")
 
-    if not drive_id or not codigo:
+    if not drive_id or not refs:
         return "Parámetros faltantes.", 400
 
     ubicacion = _carpeta_del_archivo(user, drive_id)
@@ -1542,21 +1708,38 @@ def ver_pdf(empresa=None, token=None, user=None):
     except Exception as e:
         return f"No se pudo descargar el PDF: {e}", 500
 
-    try:
-        marked_bytes, found = annotate_pdf_bytes(pdf_bytes, codigo, mode=MODO_DOC[tipo_doc])
-    except Exception:
-        marked_bytes, found = pdf_bytes, False
+    marked_bytes, found = pdf_bytes, False
+    paginas_por_ref = []
+    antes = _resaltados_por_pagina(marked_bytes) if len(refs) > 1 else []
+    for ref in refs:   # una referencia (normal) o varias (vista por documento)
+        try:
+            marked_bytes, f = annotate_pdf_bytes(marked_bytes, ref, mode=MODO_DOC[tipo_doc])
+            found = found or f
+        except Exception:
+            f = False
+        if len(refs) > 1:
+            despues = _resaltados_por_pagina(marked_bytes) if f else antes
+            paginas_por_ref.append((ref, [i + 1 for i, (a, d) in enumerate(zip(antes, despues)) if d > a]))
+            antes = despues
+    pagina_guia = None
+    if found and len(refs) > 1:
+        # abrir=ref: vista "Por referencia" -> abre en la hoja de la referencia del grupo
+        marked_bytes, pagina_guia = _guia_de_referencias(
+            marked_bytes, paginas_por_ref, request.args.get("abrir") == "ref")
 
     # Abrir directamente en la página del primer resaltado
     pagina = None
-    if found:
+    if pagina_guia:
+        pagina = pagina_guia          # varias referencias: abre arriba, donde está la nota
+    elif found:
         marked_bytes, pagina = ir_a_pagina_resaltada(marked_bytes)
     if pagina and pagina > 1:
         # El navegador salta a la página con "#page=N"; para eso el PDF se sirve desde
         # un enlace corto (se guarda unos minutos en memoria) que lleva ese número.
         clave = _guardar_pdf_listo(marked_bytes, token)
+        extra = {"codigos": codigos_txt, "abrir": request.args.get("abrir", "")} if len(refs) > 1 else {}
         return redirect(url_for("pdf_listo", clave=clave, token=token,
-                                drive_id=drive_id, codigo=codigo) + f"#page={pagina}")
+                                drive_id=drive_id, codigo=codigo, **extra) + f"#page={pagina}")
 
     return send_file(
         io.BytesIO(marked_bytes),
@@ -1596,8 +1779,10 @@ def pdf_listo(clave, empresa=None, token=None, user=None):
     codigo = request.args.get("codigo", "").strip()
     if not entrada or entrada[2] != token or time.time() - entrada[1] > _PDF_LISTOS_TTL:
         # Enlace vencido (o de otra empresa): se vuelve a generar el PDF marcado
+        extra = ({"codigos": request.args["codigos"], "abrir": request.args.get("abrir", "")}
+                 if request.args.get("codigos") else {})
         return redirect(url_for("ver_pdf", token=token, drive_id=request.args.get("drive_id", ""),
-                                codigo=codigo))
+                                codigo=codigo, **extra))
     return send_file(
         io.BytesIO(entrada[0]),
         mimetype="application/pdf",
