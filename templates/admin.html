@@ -332,6 +332,21 @@
     .modal .field-row { display: flex; gap: 8px; align-items: center; margin-bottom: 14px; }
     .modal .field-row input { margin-bottom: 0; flex: 1; font-size: 12px; }
     .modal .field-row a { font-size: 12px; color: #60a5fa; text-decoration: none; white-space: nowrap; }
+    .subs { margin: -6px 0 14px; font-size: 12px; color: #94a3b8; }
+    .subs a { color: #60a5fa; cursor: pointer; text-decoration: none; margin-left: 4px; }
+    .subs b { color: #e2e8f0; font-weight: 600; }
+    .subs .lista-subs {
+      margin-top: 8px; max-height: 190px; overflow-y: auto;
+      border: 1px solid #334155; border-radius: 8px; padding: 6px 10px; background: #0f172a;
+    }
+    .subs .lista-subs label {
+      display: flex; gap: 8px; align-items: center; margin: 0; padding: 4px 0;
+      font-size: 12.5px; color: #e2e8f0; text-transform: none; letter-spacing: 0; font-weight: 500; cursor: pointer;
+    }
+    .subs .lista-subs input { width: auto; margin: 0; }
+    .subs .lista-subs .n { color: #64748b; margin-left: auto; font-size: 11px; }
+    .subs .nota { margin-top: 6px; font-size: 11px; color: #64748b; line-height: 1.4; }
+    .parcial { color: #fbbf24; }
     .modal .check { display: flex; gap: 8px; align-items: center; font-size: 13px; color: #94a3b8; margin: 4px 0 20px; }
     .modal .check input { width: auto; margin: 0; }
     .btn-save.blue { background: #3b82f6; }
@@ -571,7 +586,7 @@
               {% elif u.legado %}
                 <span class="warn">Carpetas compartidas (las de siempre)</span> ·
               {% endif %}
-              📋 {{ u.conteo.get('manifiestos', 0) }}
+              📋 {{ u.conteo.get('manifiestos', 0) }}{% if u.subcarpetas and u.subcarpetas.get('manifiestos') %} <span class="parcial" title="{{ u.subcarpetas.get('manifiestos')|join(', ') }}">({% set n = u.subcarpetas.get('manifiestos')|length %}{{ n }} subcarpeta{{ 's' if n != 1 else '' }})</span>{% endif %}
               {% if u.tipo != 'UNIVERSAL' %} · 🧾 {{ u.conteo.get('facturas', 0) }} · 📁 {{ u.conteo.get('otros', 0) }}{% endif %}
             </div>
           </td>
@@ -597,7 +612,7 @@
                 href="/admin/qr_page/{{ token }}" target="_blank">📱 QR</a>
               {% if u.tipo != 'GENERAL' %}
               <button class="btn-sm btn-fold"
-                onclick='openCarpetas({{ token|tojson }}, {{ u.empresa|tojson }}, {{ u.tipo|tojson }}, {{ u.carpetas|tojson }}, {{ u.legado|tojson }})'>📁 Carpetas</button>
+                onclick='openCarpetas({{ token|tojson }}, {{ u.empresa|tojson }}, {{ u.tipo|tojson }}, {{ u.carpetas|tojson }}, {{ u.legado|tojson }}, {{ (u.subcarpetas or {})|tojson }})'>📁 Carpetas</button>
               {% endif %}
               <button class="btn-sm btn-upd" title="Trae solo los PDFs nuevos (rápido)"
                 onclick='actualizar({{ token|tojson }}, {{ u.empresa|tojson }})'>↻ Actualizar ahora</button>
@@ -653,11 +668,14 @@
     </div>
     <label>📋 Manifiestos</label>
     <div class="field-row"><input type="text" id="fold-manifiestos" placeholder="Link o ID de la carpeta" /><a id="lnk-manifiestos" target="_blank">Abrir ↗</a></div>
+    <div class="subs" id="subs-manifiestos"></div>
     <div id="fold-extra">
       <label>🧾 Facturas</label>
       <div class="field-row"><input type="text" id="fold-facturas" placeholder="Link o ID de la carpeta" /><a id="lnk-facturas" target="_blank">Abrir ↗</a></div>
+    <div class="subs" id="subs-facturas"></div>
       <label>📁 Otros documentos</label>
       <div class="field-row"><input type="text" id="fold-otros" placeholder="Link o ID de la carpeta" /><a id="lnk-otros" target="_blank">Abrir ↗</a></div>
+    <div class="subs" id="subs-otros"></div>
     </div>
     <label class="check"><input type="checkbox" id="fold-crear" checked /> Crear automáticamente las que estén vacías</label>
     <div class="modal-actions">
@@ -774,12 +792,75 @@
   }
 
   // Modal carpetas
+  // Subcarpetas que ve cada perfil, por tipo. [] = todas (incluye las que se creen después).
+  let SUBS = { manifiestos: [], facturas: [], otros: [] };
+  let SUBS_ABIERTO = {};
+  const TIPOS = ["manifiestos", "facturas", "otros"];
+  const escH = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+  function pintarSubs(t) {
+    const caja = document.getElementById(`subs-${t}`);
+    const val = document.getElementById(`fold-${t}`).value.trim();
+    if (!val) { caja.innerHTML = ""; return; }
+    const sel = SUBS[t] || [];
+    let html = sel.length
+      ? `Ve solo: <b>${sel.map(escH).join(", ")}</b> <a onclick="abrirSubs('${t}')">Cambiar</a>`
+      : `Ve <b>todas</b> las subcarpetas <a onclick="abrirSubs('${t}')">Elegir cuáles</a>`;
+    if (SUBS_ABIERTO[t]) html += SUBS_ABIERTO[t];
+    caja.innerHTML = html;
+  }
+
+  async function abrirSubs(t) {
+    const val = document.getElementById(`fold-${t}`).value.trim();
+    SUBS_ABIERTO[t] = `<div class="nota">Cargando subcarpetas…</div>`;
+    pintarSubs(t);
+    let d;
+    try {
+      const r = await fetch(`/admin/subcarpetas?carpeta=${encodeURIComponent(val)}`);
+      d = await r.json();
+    } catch (e) { d = { error: "Error de conexión" }; }
+    if (d.error) { SUBS_ABIERTO[t] = `<div class="nota">${escH(d.error)}</div>`; pintarSubs(t); return; }
+    if (!d.subcarpetas.length) {
+      SUBS_ABIERTO[t] = `<div class="nota">Esta carpeta no tiene subcarpetas: el perfil ve todo lo que hay en ella.</div>`;
+      SUBS[t] = []; pintarSubs(t); return;
+    }
+    const sel = SUBS[t] || [];
+    const filas = d.subcarpetas.map(x => `<label><input type="checkbox" data-t="${t}" value="${escH(x.nombre)}"
+        ${!sel.length || sel.includes(x.nombre) ? "checked" : ""} onchange="cambioSubs('${t}')">
+        📂 ${escH(x.nombre)}<span class="n">${d.indexada ? x.pdfs + " PDF" : ""}</span></label>`).join("");
+    const sueltos = d.sueltos ? `<br>Hay ${d.sueltos} PDF sueltos en la carpeta principal: solo los ve si están marcadas todas.` : "";
+    SUBS_ABIERTO[t] = `<div class="lista-subs">${filas}</div>
+      <div class="nota">Marca las que puede ver este perfil. Con todas marcadas ve también las subcarpetas que crees después.${sueltos}</div>`;
+    pintarSubs(t);
+  }
+
+  function cambioSubs(t) {
+    const cajas = [...document.querySelectorAll(`#subs-${t} input[type=checkbox]`)];
+    const marcadas = cajas.filter(c => c.checked).map(c => c.value);
+    if (!marcadas.length) { toast("Marca al menos una subcarpeta", false); cajas.forEach(c => c.checked = true); SUBS[t] = []; }
+    else SUBS[t] = marcadas.length === cajas.length ? [] : marcadas;
+    // Volver a pintar solo el resumen, sin perder la lista abierta
+    const lista = document.querySelector(`#subs-${t} .lista-subs`);
+    const nota = document.querySelector(`#subs-${t} .nota`);
+    SUBS_ABIERTO[t] = (lista ? lista.outerHTML : "") + (nota ? nota.outerHTML : "");
+    const estado = cajas.map(c => c.checked);
+    pintarSubs(t);
+    document.querySelectorAll(`#subs-${t} input[type=checkbox]`).forEach((c, i) => c.checked = estado[i]);
+  }
+
+  TIPOS.forEach(t => document.getElementById(`fold-${t}`).addEventListener("change", () => {
+    SUBS[t] = []; SUBS_ABIERTO[t] = ""; pintarSubs(t);   // otra carpeta: se ve completa
+  }));
+
   function setCampo(t, id) {
     document.getElementById(`fold-${t}`).value = id ? linkCarpeta(id) : "";
     const a = document.getElementById(`lnk-${t}`);
     a.href = linkCarpeta(id); a.style.visibility = id ? "visible" : "hidden";
+    pintarSubs(t);
   }
-  function openCarpetas(token, empresa, tipo, carpetas, legado) {
+  function openCarpetas(token, empresa, tipo, carpetas, legado, subcarpetas) {
+    SUBS = { manifiestos: [], facturas: [], otros: [], ...(subcarpetas || {}) };
+    SUBS_ABIERTO = {};
     document.getElementById("fold-token").value = token;
     document.getElementById("fold-empresa").textContent = empresa;
     const universal = tipo === "UNIVERSAL";
@@ -790,6 +871,7 @@
     document.getElementById("fold-modal").classList.add("open");
   }
   function usarLegado() {
+    SUBS.manifiestos = []; SUBS.facturas = []; SUBS_ABIERTO = {};
     setCampo("manifiestos", LEGADO.manifiestos || "");
     setCampo("facturas", LEGADO.facturas || "");
     toast("Listo: se usarán las carpetas de siempre. Revisa y guarda.");
@@ -804,6 +886,7 @@
       facturas: document.getElementById("fold-facturas").value.trim(),
       otros: document.getElementById("fold-otros").value.trim(),
       crear_faltantes: document.getElementById("fold-crear").checked,
+      subcarpetas: SUBS,
     };
     const btn = document.getElementById("btn-fold-save");
     btn.disabled = true; btn.textContent = "Guardando…";
