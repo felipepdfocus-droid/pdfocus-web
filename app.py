@@ -919,6 +919,14 @@ def ref_in_text_safe(ref_norm, text):
         idx = text.find(ref_norm, idx + 1)
     return False
 
+def _permite_unir_renglones(ref_norm):
+    """La regla de "referencia partida en dos renglones" (K-81 / 2L) solo aplica si la
+    referencia tiene alguna LETRA. Las que son solo números (ej: 0312) se buscan únicamente
+    completas, porque al pegar palabras se confunden con fechas, horas y códigos
+    (ej: "2025-01-03 12:44" daría "0312")."""
+    return any(c.isalpha() for c in ref_norm)
+
+
 def ref_in_text_nojoin(ref_norm, text):
     """
     Segundo intento para MANIFIESTOS (misma regla que find_reference_multi_nojoin, que
@@ -926,7 +934,7 @@ def ref_in_text_nojoin(ref_norm, text):
     referencias partidas en dos renglones (ej: "K-81" al final de una línea y "2L" al
     comienzo de la siguiente). Solo se usa si la búsqueda normal no la encontró.
     """
-    if _SEP not in text:
+    if _SEP not in text or not _permite_unir_renglones(ref_norm):
         return False
     full_text = text.replace(_SEP, "")
     SAFE = " \n\r\t.,:;()[]{}-/*"
@@ -1036,7 +1044,7 @@ def find_reference_multi_from_words(words, ref_norm):
 
 
 def find_reference_multi_nojoin(words, ref_norm):
-    if not words:
+    if not words or not _permite_unir_renglones(ref_norm):
         return []
     SAFE = " \n\r\t.,:;()[]{}-/*"
     parts, index_map, cursor = [], [], 0
@@ -1555,7 +1563,7 @@ def index(empresa=None, token=None, user=None):
 @require_token
 def buscar(empresa=None, token=None, user=None):
     data   = request.get_json() or {}
-    codigo = (data.get("codigo") or "").strip()
+    codigo = (data.get("codigo") or "").strip().upper()   # todo en mayúsculas
     tipo   = (data.get("tipo") or "ambos").lower()
 
     if not codigo:
@@ -1641,8 +1649,10 @@ def buscar_lista(empresa=None, token=None, user=None):
     Cada documento se descomprime una sola vez y se revisa contra todas las referencias."""
     data  = request.get_json() or {}
     texto = data.get("referencias") or ""
+    if isinstance(texto, str):
+        texto = texto.upper()                              # todo en mayúsculas
     if isinstance(texto, list):
-        texto = "\n".join(str(x) for x in texto)
+        texto = "\n".join(str(x) for x in texto).upper()
     tipo  = (data.get("tipo") or "ambos").lower()
 
     refs = _leer_lista_referencias(texto)
