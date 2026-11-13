@@ -540,12 +540,12 @@
     <p id="subtitulo">Ingresa el código o referencia a localizar en los documentos.</p>
 
     <div class="search-row">
-      <input type="text" id="codigo" placeholder="Ej: S-644WJ, 20250915..." autocomplete="off" autocorrect="off" spellcheck="false">
+      <input type="text" id="codigo" placeholder="Ej: S-644WJ, 20250915..." autocomplete="off" autocorrect="off" autocapitalize="characters" spellcheck="false">
       <button class="btn-search" id="btn-buscar" onclick="buscar()">Buscar</button>
     </div>
 
     <div class="lista-box">
-      <textarea id="lista" placeholder="Una referencia por renglón, o separadas por coma.&#10;Ej:&#10;S-644WJ&#10;K-812L&#10;GPD9248" spellcheck="false" autocomplete="off"></textarea>
+      <textarea id="lista" placeholder="Una referencia por renglón, o separadas por coma.&#10;Ej:&#10;S-644WJ&#10;K-812L&#10;GPD9248" spellcheck="false" autocomplete="off" autocapitalize="characters"></textarea>
       <div class="lista-pie">
         <span class="lista-cuenta" id="lista-cuenta">0 de {{ max_lista }} referencias</span>
         <div class="acciones">
@@ -698,6 +698,19 @@
       contarLista();
     }
   }
+
+  // Todo lo que se escribe para buscar queda en MAYÚSCULAS (también al pegar)
+  function aMayusculas(el) {
+    const v = el.value.toUpperCase();
+    if (v === el.value) return;
+    const ini = el.selectionStart, fin = el.selectionEnd;
+    el.value = v;
+    try { el.setSelectionRange(ini, fin); } catch (e) {}
+  }
+  ["codigo", "lista"].forEach(id => {
+    const el = document.getElementById(id);
+    el.addEventListener("input", () => aMayusculas(el));
+  });
 
   function setVista(v) { vistaLista = v; pintarLista(); }
 
