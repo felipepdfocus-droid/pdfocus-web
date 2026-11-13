@@ -35,6 +35,8 @@ import gzip
 import zlib
 import base64
 import sys
+import gc
+import ctypes
 
 # PyMuPDF 2.x carga automáticamente módulos de análisis de diseño con inteligencia
 # artificial (pymupdf.layout, pymupdf4llm, onnxruntime) que PDFocus NO usa y que gastan
@@ -1419,6 +1421,7 @@ def _indexar_carpetas_en_background(fids, reconstruir=False):
                     update_index_incremental(fid, fid)
             except Exception as e:
                 print(f"[INDEX] Error indexando carpeta {fid}: {e}", flush=True)
+        _liberar_memoria()
     threading.Thread(target=_run, daemon=True).start()
     return True
 
@@ -2323,6 +2326,41 @@ def _update_all(etiqueta):
             print(f"[{etiqueta}] Error actualizando {fid}: {e}", flush=True)
 
 
+# ── LIBERAR MEMORIA ──────────────────────────────────────────
+# Python (glibc) se queda con la memoria que usó para abrir un PDF grande o
+# actualizar el índice, aunque ya no la necesite. Esto se la devuelve al sistema.
+# No cambia nada de la búsqueda: solo baja el consumo en reposo.
+try:
+    _malloc_trim = ctypes.CDLL("libc.so.6").malloc_trim
+except Exception:
+    _malloc_trim = None
+_TRIM_LOCK = threading.Lock()
+
+
+def _liberar_memoria():
+    if not _TRIM_LOCK.acquire(blocking=False):
+        return                      # ya se está liberando en otro hilo
+    try:
+        gc.collect()
+        if _malloc_trim:
+            _malloc_trim(0)
+    except Exception:
+        pass
+    finally:
+        _TRIM_LOCK.release()
+
+
+@app.after_request
+def _liberar_tras_pdf(resp):
+    # Después de entregar un PDF subrayado (lo más pesado), liberar unos segundos
+    # después, cuando ya terminó de enviarse
+    if request.path.startswith(("/ver_pdf", "/pdf/")):
+        t = threading.Timer(3.0, _liberar_memoria)
+        t.daemon = True
+        t.start()
+    return resp
+
+
 # ── ACTUALIZACIÓN INCREMENTAL CADA 15 MINUTOS ────────────────
 def _hourly_update_loop():
     _STARTUP_DONE.wait()
@@ -2331,6 +2369,7 @@ def _hourly_update_loop():
         print("[HOURLY] Iniciando actualización incremental...", flush=True)
         _reload_users_sync()
         _update_all("HOURLY")
+        _liberar_memoria()
         print("[HOURLY] Actualización incremental completada.", flush=True)
 
 
@@ -2353,6 +2392,7 @@ def _start_index_background():
             if _load_index_from_disk():
                 print("[STARTUP] ✅ Índice desde /tmp. Corriendo incremental de arranque...", flush=True)
                 _update_all("STARTUP")
+                _liberar_memoria()
                 return
 
             # 2. Caché en Sheets (sobrevive deploys y reinicios de worker)
@@ -2360,6 +2400,7 @@ def _start_index_background():
                 total = sum(len(v) for v in _INDEX_CACHE.values())
                 print(f"[STARTUP] ✅ Índice desde Sheets ({total} PDFs). Corriendo incremental de arranque...", flush=True)
                 _update_all("STARTUP")
+                _liberar_memoria()
                 return
 
             # 3. Construir desde cero
