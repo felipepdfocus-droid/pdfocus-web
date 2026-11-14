@@ -916,6 +916,14 @@ def _boundary_ok(text, idx, fin, ref_norm):
             return False
         if after in ".," and despues2.isdigit():
             return False
+        # Tampoco dentro de códigos larguísimos como el CUFE de la factura electrónica
+        # (96 letras y números: "...ac833f4abd..."): ahí no hay referencias.
+        ini_tok = text.rfind(_SEP, 0, idx) + 1
+        fin_tok = text.find(_SEP, fin)
+        if fin_tok == -1:
+            fin_tok = len(text)
+        if fin_tok - ini_tok > 30:
+            return False
     return _is_border_char(before, ref_norm) and _is_border_char(after, ref_norm)
 
 
