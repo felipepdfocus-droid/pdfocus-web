@@ -907,6 +907,15 @@ def _boundary_ok(text, idx, fin, ref_norm):
     after  = text[fin]     if fin < len(text) else _SEP
     if after == "+" or before == "+":
         return False
+    if ref_norm.isdigit():
+        # Referencia solo de números (ej: 837): no puede ser un pedazo de una cifra con
+        # puntos o comas de miles/decimales ("837.964", "1.876", "2.806.824").
+        antes2 = text[idx - 2] if idx > 1 else _SEP
+        despues2 = text[fin + 1] if fin + 1 < len(text) else _SEP
+        if before in ".," and antes2.isdigit():
+            return False
+        if after in ".," and despues2.isdigit():
+            return False
     return _is_border_char(before, ref_norm) and _is_border_char(after, ref_norm)
 
 
