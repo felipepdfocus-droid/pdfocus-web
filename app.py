@@ -936,6 +936,40 @@ def ref_in_text_safe(ref_norm, text):
         idx = text.find(ref_norm, idx + 1)
     return False
 
+# ── Referencias solo de números en DECLARACIONES DE IMPORTACIÓN ──
+# En el formulario de la DIAN hay muchas casillas con números sueltos (municipio, bultos,
+# código de usuario...). Una referencia solo de números (ej: 837) se acepta en una
+# declaración únicamente si antes tiene la etiqueta REFERENCIA, REF o MODELO, que es
+# como las agencias la escriben en la descripción de la mercancía.
+_RE_DECLARACION = re.compile(
+    r"Declaraci[oó]n\W{0,3}(?:General\W{0,3})?(?:de\W{0,3})?Importaci[oó]n", re.I)
+_RE_ETIQUETA_REF = re.compile(
+    r"(?<![A-Za-z])(?:REFERENCIAS?|REF|MODELO)\s*(?:N[O°º]\.?\s*)?[:=.;,”“\"'#»|\]\)\-\s]*$", re.I)
+
+
+def es_declaracion(text):
+    return bool(_RE_DECLARACION.search(text.replace(_SEP, " ")))
+
+
+def _etiqueta_antes(text, idx):
+    ventana = text[max(0, idx - 40):idx].replace(_SEP, " ")
+    return bool(_RE_ETIQUETA_REF.search(ventana))
+
+
+def ref_in_text_manifiesto(ref_norm, text):
+    """Búsqueda en MANIFIESTOS. Igual que ref_in_text_safe, salvo una referencia solo de
+    números dentro de una declaración de importación: ahí debe tener REFERENCIA/REF/MODELO antes."""
+    if not (ref_norm.isdigit() and es_declaracion(text)):
+        return ref_in_text_safe(ref_norm, text)
+    idx = text.find(ref_norm)
+    while idx != -1:
+        fin = idx + len(ref_norm)
+        if _boundary_ok(text, idx, fin, ref_norm) and _etiqueta_antes(text, idx):
+            return True
+        idx = text.find(ref_norm, idx + 1)
+    return False
+
+
 def _permite_unir_renglones(ref_norm):
     """La regla de "referencia partida en dos renglones" (K-81 / 2L) solo aplica si la
     referencia tiene alguna LETRA. Las que son solo números (ej: 0312) se buscan únicamente
@@ -1058,7 +1092,7 @@ def _fecha_clave(nombre):
 
 
 # ── BÚSQUEDA Y ANOTACIÓN ──────────────────────────────────────
-def find_reference_multi_from_words(words, ref_norm):
+def find_reference_multi_from_words(words, ref_norm, solo_con_etiqueta=False):
     if not words:
         return []
     parts, index_map, cursor = [], [], 0
@@ -1078,7 +1112,8 @@ def find_reference_multi_from_words(words, ref_norm):
     idx = full_text.find(ref_norm)
     while idx != -1:
         fin = idx + len(ref_norm)
-        if _boundary_ok(full_text, idx, fin, ref_norm):
+        if _boundary_ok(full_text, idx, fin, ref_norm) and (
+                not solo_con_etiqueta or _etiqueta_antes(full_text, idx)):
             rs = [r for s, e, r in index_map if r is not None and e > idx and s < fin]
             if rs:
                 R = rs[0]
@@ -1118,7 +1153,8 @@ def find_reference_multi_nojoin(words, ref_norm):
 
 
 def find_reference_manifesto(words, ref_norm):
-    r = find_reference_multi_from_words(words, ref_norm)
+    etiqueta = ref_norm.isdigit() and bool(words) and es_declaracion(" ".join(w[4] for w in words))
+    r = find_reference_multi_from_words(words, ref_norm, solo_con_etiqueta=etiqueta)
     return r if r else find_reference_multi_nojoin(words, ref_norm)
 
 
@@ -1638,7 +1674,10 @@ def buscar(empresa=None, token=None, user=None):
                 compact = info["compact"]
                 if isinstance(compact, bytes):
                     compact = _decompress_compact(compact)
-                encontrado = ref_in_text_safe(ref_norm, compact)
+                if MODO_DOC[t] == "manifesto":
+                    encontrado = ref_in_text_manifiesto(ref_norm, compact)
+                else:
+                    encontrado = ref_in_text_safe(ref_norm, compact)
                 if not encontrado and MODO_DOC[t] == "manifesto":
                     encontrado = ref_in_text_nojoin(ref_norm, compact)
                 if encontrado:
@@ -1734,7 +1773,10 @@ def buscar_lista(empresa=None, token=None, user=None):
                     compact = _decompress_compact(compact)
                 item = None
                 for ref, ref_norm in pendientes:
-                    encontrado = ref_in_text_safe(ref_norm, compact)
+                    if MODO_DOC[t] == "manifesto":
+                        encontrado = ref_in_text_manifiesto(ref_norm, compact)
+                    else:
+                        encontrado = ref_in_text_safe(ref_norm, compact)
                     if not encontrado and MODO_DOC[t] == "manifesto":
                         encontrado = ref_in_text_nojoin(ref_norm, compact)
                     if not encontrado:
