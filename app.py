@@ -944,25 +944,54 @@ def _permite_unir_renglones(ref_norm):
     return any(c.isalpha() for c in ref_norm)
 
 
+_SAFE_UNION = " \n\r\t.,:;()[]{}-/*"
+
+
+def _borde_union(ch):
+    return ch in _SAFE_UNION or ch == _SEP or not ch.isalnum()
+
+
+def _cruza_union(a, b, ref_norm):
+    """¿La referencia queda partida entre la palabra a (final de un renglón) y la palabra b
+    (comienzo del siguiente)? Devuelve (inicio dentro de a, fin dentro de b) o None.
+    Solo se unen DOS palabras seguidas: así "OSO2" + "51-60" da OSO251-60 aunque
+    después venga "MARCA:" pegado en el texto."""
+    unido = a + b
+    corte = len(a)
+    idx = unido.find(ref_norm)
+    while idx != -1:
+        fin = idx + len(ref_norm)
+        if idx < corte < fin:
+            antes = unido[idx - 1] if idx > 0 else _SEP
+            despues = unido[fin] if fin < len(unido) else _SEP
+            if _borde_union(antes) and _borde_union(despues):
+                return idx, fin - corte
+        idx = unido.find(ref_norm, idx + 1)
+    return None
+
+
 def ref_in_text_nojoin(ref_norm, text):
     """
     Segundo intento para MANIFIESTOS (misma regla que find_reference_multi_nojoin, que
-    ya se usa al resaltar): une las palabras seguidas SIN separador, para encontrar
-    referencias partidas en dos renglones (ej: "K-81" al final de una línea y "2L" al
-    comienzo de la siguiente). Solo se usa si la búsqueda normal no la encontró.
+    se usa al resaltar): encuentra referencias partidas en dos renglones (ej: "K-81" al
+    final de una línea y "2L" al comienzo de la siguiente, u "OSO2" / "51-60").
+    Solo se usa si la búsqueda normal no la encontró.
     """
     if _SEP not in text or not _permite_unir_renglones(ref_norm):
         return False
-    full_text = text.replace(_SEP, "")
-    SAFE = " \n\r\t.,:;()[]{}-/*"
-    idx = full_text.find(ref_norm)
-    while idx != -1:
-        fin = idx + len(ref_norm)
-        before = full_text[idx - 1] if idx > 0 else " "
-        after  = full_text[fin]     if fin < len(full_text) else " "
-        if (before in SAFE or not before.isalnum()) and (after in SAFE or not after.isalnum()):
+    # atajo: si ni pegando todo aparece, no hay nada que revisar
+    if ref_norm not in text.replace(_SEP, ""):
+        return False
+    tokens = text.split(_SEP)
+    for i in range(len(tokens) - 1):
+        a, b = tokens[i], tokens[i + 1]
+        if not a or not b:
+            continue
+        # la referencia debe empezar en a y terminar en b
+        if ref_norm[0] not in a or ref_norm[-1] not in b:
+            continue
+        if _cruza_union(a, b, ref_norm):
             return True
-        idx = full_text.find(ref_norm, idx + 1)
     return False
 
 
@@ -1060,33 +1089,31 @@ def find_reference_multi_from_words(words, ref_norm):
     return rects
 
 
+def _pedazo(rect, texto, ini, fin):
+    """Rectángulo aproximado de los caracteres ini..fin de una palabra."""
+    n = max(len(texto), 1)
+    ancho = rect.x1 - rect.x0
+    return fitz.Rect(rect.x0 + ancho * ini / n, rect.y0, rect.x0 + ancho * fin / n, rect.y1)
+
+
 def find_reference_multi_nojoin(words, ref_norm):
+    """Resalta referencias partidas en dos renglones: marca el pedazo del final del
+    primer renglón y el pedazo del comienzo del siguiente (dos marcas, no una franja)."""
     if not words or not _permite_unir_renglones(ref_norm):
         return []
-    SAFE = " \n\r\t.,:;()[]{}-/*"
-    parts, index_map, cursor = [], [], 0
+    toks = []
     for w in words:
         raw = normalize_text(w[4]).replace(" ", "")
-        if not raw:
-            continue
-        index_map.append((cursor, cursor + len(raw), fitz.Rect(w[0], w[1], w[2], w[3])))
-        parts.append(raw)
-        cursor += len(raw)
-    full_text = "".join(parts)
+        if raw:
+            toks.append((raw, fitz.Rect(w[0], w[1], w[2], w[3])))
     rects = []
-    idx = full_text.find(ref_norm)
-    while idx != -1:
-        fin = idx + len(ref_norm)
-        before = full_text[idx - 1] if idx > 0 else " "
-        after  = full_text[fin]     if fin < len(full_text) else " "
-        if (before in SAFE or not before.isalnum()) and (after in SAFE or not after.isalnum()):
-            rs = [r for s, e, r in index_map if r is not None and e > idx and s < fin]
-            if rs:
-                R = rs[0]
-                for rr in rs[1:]:
-                    R |= rr
-                rects.append(R)
-        idx = full_text.find(ref_norm, idx + 1)
+    for i in range(len(toks) - 1):
+        (a, ra), (b, rb) = toks[i], toks[i + 1]
+        r = _cruza_union(a, b, ref_norm)
+        if r:
+            ini_a, fin_b = r
+            rects.append(_pedazo(ra, a, ini_a, len(a)))
+            rects.append(_pedazo(rb, b, 0, fin_b))
     return rects
 
 
