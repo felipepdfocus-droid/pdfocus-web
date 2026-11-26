@@ -951,9 +951,28 @@ def es_declaracion(text):
     return bool(_RE_DECLARACION.search(text.replace(_SEP, " ")))
 
 
+_RE_ETIQUETA_PALABRA = re.compile(r"(?<![A-Za-z])(?:REFERENCIAS?|REF|MODELO)(?![A-Za-z])", re.I)
+_RE_NO_ENTRE = re.compile(r"(CANTIDAD|CANT\b|MARCA|SERIAL|UNIDAD|PCS|PIEZA|PESO|VALOR|ITEM|FACTURA|SIN\s+REF)", re.I)
+
+
 def _etiqueta_antes(text, idx):
-    ventana = text[max(0, idx - 40):idx].replace(_SEP, " ")
-    return bool(_RE_ETIQUETA_REF.search(ventana))
+    """¿Hay REFERENCIA/REF/MODELO poco antes del número? Puede haber algo corto en medio,
+    como en "Ref de Producto: M:8415", pero no otro número ni palabras como CANTIDAD."""
+    ventana = text[max(0, idx - 45):idx].replace(_SEP, " ")
+    ultima = None
+    for m in _RE_ETIQUETA_PALABRA.finditer(ventana):
+        ultima = m
+    if not ultima:
+        return False
+    if re.search(r"SIN\s*$", ventana[:ultima.start()], re.I):
+        return False                      # "SIN REF." / "SIN REFERENCIA"
+    entre = ventana[ultima.end():]
+    previo = entre[-1:] if entre else ""
+    if previo.isalpha() or previo in "(-":
+        return False                      # el número es parte de otro código (ADM3687) o una cantidad "(120"
+    if len(entre) > 28 or any(ch.isdigit() for ch in entre) or _RE_NO_ENTRE.search(entre):
+        return False
+    return True
 
 
 def ref_in_text_manifiesto(ref_norm, text):
